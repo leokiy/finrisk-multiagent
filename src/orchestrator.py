@@ -371,27 +371,25 @@ devils_advocate: [directive]"""
                                        per_agent_queries: dict[str, str],
                                        question_type: str,
                                        doc_type: str = "") -> dict[str, list[str]]:
-        """为每个 Agent 生成针对其角色特点的联网搜索查询。
+        """为每个 Agent 生成两条联网搜索查询：一条找信息、一条交叉验证。
 
         每个 Agent 的搜索方向不同：
-        - 数据提取：搜具体财务数据、关键指标
-        - 风险评估：搜行业风险、市场动态、负面事件
-        - 合规审查：搜监管政策变化、处罚案例
-        - 深度质疑：搜争议事件、做空报告、被忽视的风险信号
+        - 数据提取：搜具体财务数据 → 用另一来源验证数字
+        - 风险评估：搜行业风险/负面新闻 → 搜相反观点/反驳信息
+        - 合规审查：搜监管政策变化 → 搜公司是否有违规记录
+        - 深度质疑：搜争议事件/做空报告 → 搜公司回应/辩解
 
         Returns:
-            {agent_key: [search_query, ...]}
+            {agent_key: [info_query, verify_query]}
         """
         lang = self.language
 
-        # 数据查询模式：直接用用户问题搜索
+        # 数据查询模式：一条找数据、一条验证
         if question_type == "factual":
-            return {"data_extractor": [user_query]}
-
-        data_query = per_agent_queries.get("data_extractor", user_query)[:200]
+            return {"data_extractor": [user_query, f"{user_query} 最新数据 核实"]}
 
         if lang == "zh":
-            prompt = f"""你是金融信息检索专家。4个专业Agent即将分析一份金融文档，请为每个Agent生成1个精准的联网搜索查询。
+            prompt = f"""你是金融信息检索专家。4个专业Agent即将分析一份金融文档，每个Agent需要联网搜索来获取信息并验证自己判断的准确性。请为每个Agent生成2条搜索查询。
 
 ## 用户问题
 {user_query}
@@ -399,23 +397,34 @@ devils_advocate: [directive]"""
 ## 文档类型
 {doc_type or '未知'}
 
-## 各Agent的搜索方向
-- 数据提取Agent：搜索最新的具体财务数据、关键指标数值、季度/年度财报
-- 风险评估Agent：搜索行业风险动态、市场环境变化、公司及竞争对手的负面新闻、经营风险事件
-- 合规审查Agent：搜索最新的监管政策变化、合规要求更新、同行业处罚案例
-- 深度质疑Agent：搜索可能被忽略的风险信号、市场争议事件、做空或质疑性分析
+## 各Agent的搜索需求（信息 + 验证）
+- 数据提取Agent：
+  信息查询：搜索最新的具体财务数据、关键指标、季度/年度财报
+  验证查询：搜另一个来源核实同一数据，确认数字的准确性
+- 风险评估Agent：
+  信息查询：搜索行业风险动态、市场环境变化、负面新闻、经营风险事件
+  验证查询：搜索相反观点或公司正面信息，检验自己的风险判断是否偏颇
+- 合规审查Agent：
+  信息查询：搜索最新的监管政策变化、合规要求更新
+  验证查询：搜索该公司是否有实际违规记录、处罚公告、监管函
+- 深度质疑Agent：
+  信息查询：搜索可能被忽略的风险信号、市场争议、做空报告
+  验证查询：搜索公司对这些质疑的回应、澄清公告
 
 ## 要求
-- 每个Agent只生成1个搜索查询（自然语言，10-30字）
-- 查询要包含问题中的关键实体（公司名/行业/指标）
-- 查询要具体、可直接用于搜索
-- 严格按以下格式输出（每行一个）：
-data_extractor_search: <查询>
-risk_assessor_search: <查询>
-compliance_checker_search: <查询>
-devils_advocate_search: <查询>"""
+- 每个Agent生成2条查询，第一条找信息，第二条交叉验证
+- 查询自然语言，10-30字，包含关键实体（公司名/行业/指标）
+- 严格按格式输出（每行一个）：
+data_extractor_info: <信息查询>
+data_extractor_verify: <验证查询>
+risk_assessor_info: <信息查询>
+risk_assessor_verify: <验证查询>
+compliance_checker_info: <信息查询>
+compliance_checker_verify: <验证查询>
+devils_advocate_info: <信息查询>
+devils_advocate_verify: <验证查询>"""
         else:
-            prompt = f"""You are a financial information retrieval expert. Generate 1 precise web search query for each of 4 specialized agents about to analyze a financial document.
+            prompt = f"""You are a financial information retrieval expert. Generate 2 search queries for each agent: one to find information, one to cross-verify.
 
 ## User Question
 {user_query}
@@ -423,38 +432,46 @@ devils_advocate_search: <查询>"""
 ## Document Type
 {doc_type or 'Unknown'}
 
-## Search Directions per Agent
-- Data Extractor: search for latest specific financial data, key metrics, quarterly/annual reports
-- Risk Assessor: search for industry risks, market changes, negative news about the company/competitors, operational risk events
-- Compliance Checker: search for latest regulatory changes, compliance updates, industry enforcement actions
-- Devil's Advocate: search for overlooked risk signals, market controversies, short reports, skeptical analysis
+## Agent Search Needs (info + verification)
+- Data Extractor: info query for latest financials → verify query to cross-check numbers with another source
+- Risk Assessor: info query for industry risks/negative news → verify query for opposing viewpoints
+- Compliance Checker: info query for regulatory changes → verify query for actual violation records
+- Devil's Advocate: info query for overlooked risks/controversies → verify query for company responses
 
 ## Requirements
-- 1 search query per agent (natural language, 10-20 words)
-- Include key entities (company name/industry/metrics) from the question
-- Be specific and directly usable for web search
+- 2 queries per agent: first for info, second for verification
+- Natural language, include key entities
 - Output format (one per line):
-data_extractor_search: <query>
-risk_assessor_search: <query>
-compliance_checker_search: <query>
-devils_advocate_search: <query>"""
+data_extractor_info: <info query>
+data_extractor_verify: <verify query>
+risk_assessor_info: <info query>
+risk_assessor_verify: <verify query>
+compliance_checker_info: <info query>
+compliance_checker_verify: <verify query>
+devils_advocate_info: <info query>
+devils_advocate_verify: <verify query>"""
 
         key_map = {
-            "data_extractor_search": "data_extractor",
-            "risk_assessor_search": "risk_assessor",
-            "compliance_checker_search": "compliance_checker",
-            "devils_advocate_search": "devils_advocate",
+            "data_extractor_info": "data_extractor",
+            "data_extractor_verify": "data_extractor",
+            "risk_assessor_info": "risk_assessor",
+            "risk_assessor_verify": "risk_assessor",
+            "compliance_checker_info": "compliance_checker",
+            "compliance_checker_verify": "compliance_checker",
+            "devils_advocate_info": "devils_advocate",
+            "devils_advocate_verify": "devils_advocate",
         }
 
         try:
             resp = self.llm.chat(
                 [{"role": "user", "content": prompt}],
-                model="qwen-turbo", temperature=0.1, max_tokens=400,
+                model="qwen-turbo", temperature=0.1, max_tokens=600,
             )
         except Exception:
-            # 降级：所有 Agent 共用用户原始问题
-            return {k: [user_query] for k in key_map.values()}
+            return {k: [user_query] for k in
+                    ["data_extractor", "risk_assessor", "compliance_checker", "devils_advocate"]}
 
+        # 解析：同一 agent 的两条查询合并到同一个 list
         queries: dict[str, list[str]] = {}
         for line in resp.strip().split("\n"):
             line = line.strip()
@@ -462,10 +479,10 @@ devils_advocate_search: <query>"""
                 if line.lower().startswith(prefix.lower()):
                     q = line.split(":", 1)[-1].strip().strip('"').strip("'")
                     if q and len(q) > 2:
-                        queries[key] = [q]
+                        queries.setdefault(key, []).append(q)
 
         # 补全缺失的 Agent
-        for key in key_map.values():
+        for key in ["data_extractor", "risk_assessor", "compliance_checker", "devils_advocate"]:
             if key not in queries or not queries[key]:
                 queries[key] = [user_query]
 
@@ -739,7 +756,7 @@ Rules:
             return self.llm.chat(messages)
 
         elif web_search_enabled:
-            # ── 无预搜索结果：LLM 自行联网搜索 ──
+            # ── 搜索未返回结果（DDGS 失败），只用文档数据 ──
             if lang == "zh":
                 content = f"""今天是{today}。
 
@@ -748,11 +765,10 @@ Rules:
 上传文档：{doc_info}
 文档中提取到的信息：{agent_output}
 
-请务必联网搜索与用户问题相关的最新数据，结合文档信息直接回答。
-重要：现在是{today}，你的训练数据可能已过时。一定要搜索网上最新发布的数据。
+注意：联网搜索暂时不可用，请仅基于文档数据回答。
 规则：
 1. 第一句话直接给答案（具体数字+单位）
-2. 标注每个数据的来源（文档第X页 或 网络来源/时间）
+2. 文档有就给数据+页码，文档没有就说未披露
 3. 控制在10行以内，不展开分析"""
             else:
                 content = f"""Today is {today}.
@@ -762,18 +778,16 @@ Question: {user_query}
 Document: {doc_info}
 Data from document: {agent_output}
 
-You MUST search the web for the latest data related to this question, then combine with document data.
-IMPORTANT: It is now {today}. Your training data is outdated. Search for the most recently published data.
+Note: Web search is temporarily unavailable. Answer based on document data only.
 Rules:
 1. First sentence: direct answer with numbers. No preamble.
-2. Cite source for each data point (document page / web source + date)
+2. If in document, cite page. If not, state not disclosed.
 3. Keep under 10 lines, no analysis."""
 
             messages = [{"role": "user", "content": content}]
             if on_token:
-                return self.llm.chat_stream(messages, on_token=on_token,
-                                           enable_search=True)
-            return self.llm.chat(messages, enable_search=True)
+                return self.llm.chat_stream(messages, on_token=on_token)
+            return self.llm.chat(messages)
 
         else:
             # ── 无联网：只用文档数据 ──

@@ -144,6 +144,13 @@ Evaluate risk across four dimensions. For each dimension, your analysis MUST inc
 - [ ] Risk levels match evidence severity — Level 3 evidence cannot produce Level 4 rating
 - [ ] No avoidance of negative signals present in the document
 
+## 🌐 Web Search Results Usage
+
+If you receive "Web Search Results", they are real-time search engine content. You MUST:
+1. **Verify your judgments**: Cross-check your risk assessment against web data — if there is newer industry data or negative news, incorporate it
+2. **Prioritize recency**: Document data may be stale. If web results show more recent events/data, prefer them and cite "Web source: URL"
+3. **Self-challenge**: Actively look for information that contradicts your analysis — if found, discuss the discrepancy
+
 ## ⚠️ Document Grounding
 
-**All analysis must be based on the retrieved document excerpts above.** Every judgment must be traceable to a specific excerpt. If information for a dimension is insufficient, explicitly mark "[Insufficient data]". Do NOT supplement with general industry/company knowledge. Analyze only what the document actually contains.
+**All analysis must be based on the retrieved document excerpts and web search results above.** Every judgment must be traceable to a specific excerpt or web result. If information for a dimension is insufficient, explicitly mark "[Insufficient data]".

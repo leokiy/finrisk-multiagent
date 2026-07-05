@@ -112,8 +112,8 @@ class BaseAgent(ABC):
                                             context_from_other_agents,
                                             web_search_results)
 
-            # 3. 调用 LLM（enable_search 通过 kwargs 传递，线程安全）
-            raw_output = self.llm.chat(messages, enable_search=enable_search)
+            # 3. 调用 LLM（搜索已由 DDGS 完成，不再传 enable_search）
+            raw_output = self.llm.chat(messages)
 
             # 4. 后处理
             final = self._postprocess(raw_output)
@@ -151,22 +151,37 @@ class BaseAgent(ABC):
                         web_results: list | None = None) -> list[dict]:
         parts = [self.system_prompt]
 
-        # 注入联网搜索结果（放在文档片段之前，要求Agent使用）
+        # 注入联网搜索结果（放在文档片段之前，要求Agent使用和验证）
         if web_results:
             web_lines = [
-                "\n\n## 🔴 联网搜索结果（你必须使用这些外部信息来补充和验证你的分析）\n",
-                "以下是从互联网实时搜索到的最新行业数据、新闻报道和监管动态。",
-                "你必须在分析中引用这些信息，用于：\n",
-                "1. **行业对标**：将文档中的财务数据与行业平均水平进行对比\n",
-                "2. **时效性验证**：检查文档数据截止日后是否有重大事件发生\n",
-                "3. **外部风险识别**：搜索可能影响公司的最新政策、市场或监管变化\n",
-                "引用外部信息时标注来源URL。\n",
+                "\n\n## 🌐 联网搜索结果（真实搜索引擎返回的最新信息）\n",
+                "以下是从互联网实时搜索到的最新数据、新闻和公告。\n",
+                "**你必须用这些信息做两件事：**\n",
+                "1. **补充信息**：如果文档缺少某些数据，用搜索结果填充\n",
+                "2. **交叉验证**：对比你的分析结论和搜索结果——如果搜索结果与你的判断有出入，必须指出并讨论差异\n",
+                "   - 如果搜索结果支持你的结论 → 标注为\"网络数据印证\"\n",
+                "   - 如果搜索结果与你的结论矛盾 → 标注为\"网络数据显示不同\"并讨论可能原因\n",
+                "引用网络信息时标注来源URL。\n",
             ]
+            has_info = False
+            has_verify = False
             for i, wr in enumerate(web_results, 1):
+                label = f"搜索结果 {i}"
+                # 根据标题判断是信息还是验证类型的搜索
+                if wr.url and "verify" in wr.url.lower():
+                    label += " [验证]"
+                    has_verify = True
+                else:
+                    has_info = True
                 web_lines.append(
-                    f"### 搜索结果 {i}: {wr.title}\n"
+                    f"### {label}: {wr.title}\n"
                     f"- 来源: {wr.url}\n"
                     f"- 内容: {wr.snippet}\n"
+                )
+            # 如果没有明显的验证结果，提醒Agent自行核验
+            if not has_verify and has_info:
+                web_lines.append(
+                    "\n**⚠️ 以上主要为信息类搜索结果。请自行交叉比对不同来源的数据，如有矛盾必须指出。**\n"
                 )
             parts.append("".join(web_lines))
 

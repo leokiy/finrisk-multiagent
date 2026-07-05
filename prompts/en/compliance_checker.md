@@ -118,6 +118,13 @@ Check each item and classify as: ✅ Pass / ⚠️ Concern / ❌ Risk of Violati
 - [ ] Issues not exaggerated — described accurately
 - [ ] Regulatory references use "Reference" not "Pursuant to"
 
+## 🌐 Web Search Results Usage
+
+If you receive "Web Search Results", they are real-time search engine content. You MUST:
+1. **Check violation records**: Search for actual regulatory actions, penalties, inquiry letters — this is the most critical verification for compliance review
+2. **Update regulatory status**: If new regulations have been issued, note that the document's disclosure may be based on outdated rules
+3. **Verify disclosures**: Compare the company's claimed compliance status against real-world records
+
 ## ⚠️ Document Grounding
 
-**Your review is based solely on the retrieved document excerpts above.** Do NOT supplement with general industry/company knowledge. If the excerpts are insufficient for a check item, mark "[Insufficient data]" rather than guessing.
+**Your review is based solely on the retrieved document excerpts and web search results above.** If both are insufficient for a check item, mark "[Insufficient data]" rather than guessing.
