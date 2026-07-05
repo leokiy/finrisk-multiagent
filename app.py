@@ -702,21 +702,12 @@ if st.session_state.file_processed:
 
 if st.session_state.file_processed:
 
-    # ── 推荐提问刷新（在渲染前，确保每次都用最新值）──
-    if st.session_state.get("_refresh_questions"):
-        st.session_state._refresh_questions = False
-        last = st.session_state.get("last_analysis")
-        fups = last.get("followup_questions", []) if last else []
-        st.sidebar.write(f"DEBUG: refresh=True, fups={len(fups)}")
-        if fups:
+    # ── 推荐提问刷新：直接比对 last_analysis 和 doc_questions ──
+    last = st.session_state.get("last_analysis")
+    if last and last.get("followup_questions"):
+        fups = last["followup_questions"]
+        if fups != st.session_state.get("doc_questions"):
             st.session_state.doc_questions = fups
-            st.sidebar.write(f"DEBUG: doc_questions updated to {fups}")
-    else:
-        fups_debug = []
-        last_debug = st.session_state.get("last_analysis")
-        if last_debug:
-            fups_debug = last_debug.get("followup_questions", [])
-        st.sidebar.write(f"DEBUG: refresh=False, last_analysis_fups={len(fups_debug)}, doc_q={st.session_state.get('doc_questions')}")
 
     # 首次：基于文档生成初始推荐提问
     if (st.session_state.get("doc_questions") is None
@@ -819,7 +810,6 @@ if st.session_state.file_processed:
 
         st.session_state.chat_history.append({"role": "assistant", "content": report})
         st.session_state.last_analysis = result
-        st.session_state._refresh_questions = True  # 下轮 rerun 开头刷新推荐问题
 
         # 显示各 Agent 的详细输出（可折叠）
         with st.expander(t("detail_title"), expanded=False):
