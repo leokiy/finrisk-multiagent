@@ -6,6 +6,7 @@
 """
 
 import re
+from datetime import datetime
 from dataclasses import dataclass
 
 
@@ -38,19 +39,29 @@ def search_web(query: str, api_key: str = "", max_results: int = 2,
     try:
         import dashscope
 
-        search_prompt = (
-            f"请搜索以下内容，返回具体数据、来源和日期。不要编造数据：{query}"
-            if language == "zh"
-            else f"Search for the following. Return specific data, sources and dates. Do not fabricate: {query}"
-        )
+        today = datetime.now().strftime("%Y年%m月%d日" if language == "zh" else "%B %d, %Y")
+
+        if language == "zh":
+            search_prompt = (
+                f"今天是{today}。请联网搜索以下内容，返回具体数据、来源和日期。\n"
+                f"重要：一定要搜索最新数据，不要依赖你的训练数据。你的知识可能已过时。\n"
+                f"搜索内容：{query}"
+            )
+        else:
+            search_prompt = (
+                f"Today is {today}. Search the web for the following. "
+                f"Return specific data, sources and dates.\n"
+                f"IMPORTANT: Search for the LATEST data. Your training data may be outdated.\n"
+                f"Search query: {query}"
+            )
 
         resp = dashscope.Generation.call(
-            model="qwen-turbo",
+            model="qwen-plus",
             messages=[{"role": "user", "content": search_prompt}],
             result_format="message",
             api_key=api_key,
             enable_search=True,
-            max_tokens=800,
+            max_tokens=1000,
             temperature=0.1,
         )
 

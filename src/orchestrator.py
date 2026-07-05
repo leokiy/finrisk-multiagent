@@ -681,9 +681,12 @@ Output (clarification → information needs → analysis directive):"""
         2. 开启了搜索但无预搜索结果 → LLM 自行联网搜索
         3. 未开启搜索 → 只用文档数据
         """
+        from datetime import datetime
+
         lang = self.language
         doc_info = f"文档类型：{doc_type}" if doc_type else "未知"
         agent_output = data_result.content if data_result.success else "提取失败"
+        today = datetime.now().strftime("%Y年%m月%d日" if lang == "zh" else "%B %d, %Y")
 
         if web_search_enabled and web_results:
             # ── 有预搜索结果：直接注入，不重复搜索 ──
@@ -695,7 +698,9 @@ Output (clarification → information needs → analysis directive):"""
             web_text = "\n\n".join(web_text_parts) if web_text_parts else "（未获取到搜索结果）"
 
             if lang == "zh":
-                content = f"""用户想知道：{user_query}
+                content = f"""今天是{today}。
+
+用户想知道：{user_query}
 
 ## 文档中提取到的信息
 {agent_output}
@@ -707,10 +712,12 @@ Output (clarification → information needs → analysis directive):"""
 规则：
 1. 第一句话直接给答案（具体数字+单位），不要铺垫
 2. 同时列出文档数据和网络数据，标注来源（文档第X页 / 网络来源）
-3. 如果数据冲突，优先采信更近期的数据，并说明差异
+3. 网络搜索结果来自实时搜索，优先采信——即使和你训练数据中的信息不一致也要以搜索结果为准
 4. 回答控制在10行以内，不展开分析"""
             else:
-                content = f"""Question: {user_query}
+                content = f"""Today is {today}.
+
+Question: {user_query}
 
 ## Data from Document
 {agent_output}
@@ -722,7 +729,7 @@ Synthesize document data and web search results into a direct answer.
 Rules:
 1. First sentence: the answer with numbers. No preamble.
 2. List both document data and web data, cite sources (document page / web source)
-3. If data conflicts, prefer more recent data and explain the difference
+3. Web results are from real-time search — trust them even if they conflict with your training data
 4. Keep under 10 lines, no analysis."""
 
             messages = [{"role": "user", "content": content}]
@@ -734,23 +741,29 @@ Rules:
         elif web_search_enabled:
             # ── 无预搜索结果：LLM 自行联网搜索 ──
             if lang == "zh":
-                content = f"""用户想知道：{user_query}
+                content = f"""今天是{today}。
+
+用户想知道：{user_query}
 
 上传文档：{doc_info}
 文档中提取到的信息：{agent_output}
 
-请联网搜索与用户问题相关的最新数据，结合文档信息直接回答。
+请务必联网搜索与用户问题相关的最新数据，结合文档信息直接回答。
+重要：现在是{today}，你的训练数据可能已过时。一定要搜索网上最新发布的数据。
 规则：
 1. 第一句话直接给答案（具体数字+单位）
 2. 标注每个数据的来源（文档第X页 或 网络来源/时间）
 3. 控制在10行以内，不展开分析"""
             else:
-                content = f"""Question: {user_query}
+                content = f"""Today is {today}.
+
+Question: {user_query}
 
 Document: {doc_info}
 Data from document: {agent_output}
 
-Search the web for the latest data related to this question, then combine with document data.
+You MUST search the web for the latest data related to this question, then combine with document data.
+IMPORTANT: It is now {today}. Your training data is outdated. Search for the most recently published data.
 Rules:
 1. First sentence: direct answer with numbers. No preamble.
 2. Cite source for each data point (document page / web source + date)
