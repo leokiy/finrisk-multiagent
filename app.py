@@ -810,7 +810,11 @@ if st.session_state.file_processed:
                 for log in result.get("execution_log", []):
                     status_icon = {"running": "⏳", "done": "✅", "error": "❌"}
                     icon = status_icon.get(log["status"], "•")
-                    st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
+                    content = log.get("content", "")
+                    if content:
+                        st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
+                    else:
+                        st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
 
 else:
     # 未上传文件时显示欢迎信息
