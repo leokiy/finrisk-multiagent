@@ -46,7 +46,7 @@ flowchart TB
     D --> G[🔍 深度质疑 Agent<br/>挑战结论 / 寻找盲点]
     E --> G
     F --> G
-    G --> H[🎯 Orchestrator 综合裁决<br/>factual 直接答 | analytical 聚焦答 | comprehensive 完整报告]
+    G --> H[🎯 Orchestrator 综合裁决<br/>factual 直接答 · analytical 聚焦答 · comprehensive 完整报告]
 ```
 
 ### 自适应分析深度
