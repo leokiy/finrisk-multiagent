@@ -212,14 +212,15 @@ class Orchestrator:
                 "execution_log": self.reporter.logs,
             }
 
+        is_comprehensive = question_type == "comprehensive"
+
         # ═══════════════════════════════════════════════════════════════
-        # 第一轮：3 Agent 并行（各自拿到原始问题+文档简报+专属搜索结果）
+        # 第一轮：Agent 并行分析
         # ═══════════════════════════════════════════════════════════════
         self.reporter.update(
             "Orchestrator", "running",
-            ("启动第一轮分析：各Agent独立检索文档并分析..."
-             if lang == "zh" else
-             "Round 1: Agents independently searching document and analyzing...")
+            ("启动分析：各Agent独立检索文档并分析..."
+             if lang == "zh" else "Agents analyzing...")
         )
 
         round1_results = self._run_parallel_with_queries(
@@ -231,54 +232,75 @@ class Orchestrator:
 
         data_result, risk_result, compliance_result = round1_results
 
-        # ═══════════════════════════════════════════════════════════════
-        # 第二轮：深度质疑
-        # ═══════════════════════════════════════════════════════════════
-        self.reporter.update(
-            "Devil's Advocate", "running",
-            ("正在审阅前三方分析结果，寻找盲点和矛盾..."
-             if lang == "zh" else
-             "Devil's Advocate reviewing all outputs for blind spots...")
-        )
-
-        other_context = {
-            self.data_extractor.prompt_file: data_result.content if data_result.success else f"[Failed] {data_result.error}",
-            self.risk_assessor.prompt_file: risk_result.content if risk_result.success else f"[Failed] {risk_result.error}",
-            self.compliance.prompt_file: compliance_result.content if compliance_result.success else f"[Failed] {compliance_result.error}",
-        }
-
-        devil_result = self.devils_advocate.run(
-            user_query, vector_store,
-            context_from_other_agents=other_context,
-            api_key=api_key,
-            doc_brief=doc_brief,
-            web_search_results=agent_web_results.get("devils_advocate"),
-        )
-        self._log_agent_result(devil_result)
-
-        # ── 第三轮：Agent 回应质疑 ──
+        devil_result = None
         rebuttals = {}
-        if devil_result.success and devil_result.content:
-            msg_rebuttal = ("Agent 正在回应质疑..."
-                           if lang == "zh" else
-                           "Agents responding to challenges...")
-            self.reporter.update("Orchestrator", "running", msg_rebuttal)
-            rebuttals = self._collect_rebuttals(
-                data_result, risk_result, compliance_result,
-                devil_result, vector_store, api_key, web_search_enabled,
+
+        if is_comprehensive:
+            # ═══════════════════════════════════════════════════════════
+            # 全面评估：深度质疑 + 回应 + 综合报告
+            # ═══════════════════════════════════════════════════════════
+            self.reporter.update(
+                "Devil's Advocate", "running",
+                ("正在审阅前三方分析结果..."
+                 if lang == "zh" else "Devil's Advocate reviewing...")
             )
 
-        # ── 第四轮：综合 ──
-        msg4 = ("正在综合所有分析结果、质疑与回应，生成最终报告..."
-                if lang == "zh" else
-                "Synthesizing all analysis, challenges, and rebuttals into final report...")
-        self.reporter.update("Orchestrator", "running", msg4)
+            other_context = {
+                self.data_extractor.prompt_file: data_result.content if data_result.success else f"[Failed] {data_result.error}",
+                self.risk_assessor.prompt_file: risk_result.content if risk_result.success else f"[Failed] {risk_result.error}",
+                self.compliance.prompt_file: compliance_result.content if compliance_result.success else f"[Failed] {compliance_result.error}",
+            }
 
-        self.llm.config.enable_search = web_search_enabled
-        final_report = self._synthesize_with_rebuttals(
-            user_query, data_result, risk_result, compliance_result,
-            devil_result, rebuttals, on_synthesis_token,
-        )
+            devil_result = self.devils_advocate.run(
+                user_query, vector_store,
+                context_from_other_agents=other_context,
+                api_key=api_key,
+                doc_brief=doc_brief,
+                web_search_results=agent_web_results.get("devils_advocate"),
+            )
+            self._log_agent_result(devil_result)
+
+            if devil_result.success and devil_result.content:
+                self.reporter.update("Orchestrator", "running",
+                                     "Agent 正在回应质疑..." if lang == "zh" else "Rebuttals...")
+                rebuttals = self._collect_rebuttals(
+                    data_result, risk_result, compliance_result,
+                    devil_result, vector_store, api_key, web_search_enabled,
+                )
+
+            self.reporter.update("Orchestrator", "running",
+                                 "正在生成综合报告..." if lang == "zh" else "Synthesizing...")
+            final_report = self._synthesize_with_rebuttals(
+                user_query, data_result, risk_result, compliance_result,
+                devil_result, rebuttals, on_synthesis_token,
+            )
+        else:
+            # ═══════════════════════════════════════════════════════════
+            # 专项分析：直接综合，不跑魔鬼代言人
+            # ═══════════════════════════════════════════════════════════
+            self.reporter.update("Orchestrator", "running",
+                                 "正在生成分析报告..." if lang == "zh" else "Synthesizing...")
+            # 将 Agent 输出拼接后快速综合
+            agent_text = ""
+            if data_result.success:
+                agent_text += f"## 数据提取\n{data_result.content[:1500]}\n\n"
+            if risk_result.success:
+                agent_text += f"## 风险评估\n{risk_result.content[:1500]}\n\n"
+            if compliance_result.success:
+                agent_text += f"## 合规审查\n{compliance_result.content[:1500]}\n\n"
+
+            synthesis_prompt = f"""用户问题：{user_query}
+
+以下为专业Agent的分析结果。请根据协调Agent准则，用与问题匹配的详略程度综合回答。
+
+{agent_text}
+
+重要：用户问什么就答什么。如果只问了某一方面，只答那方面。不要输出全面报告。"""
+            messages = [
+                {"role": "system", "content": self.synthesis_prompt},
+                {"role": "user", "content": synthesis_prompt},
+            ]
+            final_report = self.llm.chat_stream(messages, on_token=on_synthesis_token) if on_synthesis_token else self.llm.chat(messages)
 
         self.reporter.update("Orchestrator", "done",
                              "分析完成。" if lang == "zh" else "Analysis complete.")
@@ -289,7 +311,7 @@ class Orchestrator:
             "data_extraction":    self._safe_result(data_result),
             "risk_assessment":    self._safe_result(risk_result),
             "compliance_check":   self._safe_result(compliance_result),
-            "devils_advocate":    self._safe_result(devil_result),
+            "devils_advocate":    self._safe_result(devil_result) if devil_result else "",
             "rebuttals":          {k: v.content for k, v in rebuttals.items()},
             "final_report":       final_report,
             "execution_log":      self.reporter.logs,
@@ -718,14 +740,14 @@ devils_advocate_verify: <query>"""
 
             if lang == "zh":
                 content = f"""你是数据查询助手。今天是{today}。
-
 问：{user_query}
-
 文档：{doc_data}
-
 网络搜索：{web_text}
-
-规则：一句话回答。格式："XXX为【数字+单位】（网络来源）"。最多3行。不要表格。"""
+规则：
+- 从搜索结果中复制数字回答。如搜到\"净利润57.35亿元\"就写\"净利润57.35亿元\"
+- 如果搜索结果有具体数字，直接用，标注网络来源
+- 文档和搜索都没数据才说未找到
+- 最多3行"""
             else:
                 content = f"""Data query. Today is {today}.
 Q: {user_query}
