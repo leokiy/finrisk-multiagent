@@ -18,6 +18,7 @@ You will receive:
 4. ⚠️ Risk Assessment Agent's output
 5. 📋 Compliance Checker Agent's output
 6. 🔍 Devil's Advocate Agent's output
+7. (If web search is enabled) Each agent has independently searched the web for supplementary information — industry data, news, regulatory updates. You should reference this external information in your report for industry benchmarking, timeliness verification, and external risk identification.
 
 ## Answer Rules (READ FIRST — most important)
 
