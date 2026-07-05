@@ -74,89 +74,96 @@ class Orchestrator:
             api_key: str = "", on_synthesis_token=None,
             web_search_enabled: bool = False,
             doc_type: str = "") -> dict:
-        """完整执行多 Agent 协作工作流，自适应分析深度。"""
+        """完整执行多 Agent 协作工作流。
+
+        新架构：
+        0. 扫描文档 → 文档简报（公司名/代码/行业/报告期）
+        1. 基于简报 + 用户原始问题 → 各Agent专属搜索词
+        2. 并行执行搜索 → 搜索结果注入各Agent
+        3. Agent 拿到：用户原始问题 + 文档简报 + 自己的RAG检索 + 自己的搜索结果
+        4. 深度质疑 → 回应 → 综合报告
+        """
         self.reporter.clear()
         lang = self.language
 
-        # ── 第零轮：理解问题 + 判断意图 ──
-        msg0 = ("正在理解你的问题，判断分析策略..."
-                if lang == "zh" else
-                "Understanding your question, determining analysis depth...")
-        self.reporter.update("Orchestrator", "running", msg0)
+        # ═══════════════════════════════════════════════════════════════
+        # 第零轮：扫描文档 → 文档简报
+        # ═══════════════════════════════════════════════════════════════
+        self.reporter.update(
+            "Orchestrator", "running",
+            ("正在分析文档结构..."
+             if lang == "zh" else "Analyzing document structure...")
+        )
+        doc_brief = self._scan_document_brief(vector_store, api_key, doc_type)
+        question_type = self._classify_question(user_query)
 
-        queries, question_type = self._reformulate_per_agent(user_query)
+        import json
+        print(f"[DEBUG] question_type={question_type}")
+        print(f"[DEBUG] doc_brief={doc_brief[:300]}")
 
-        # ── 联网搜索：为各 Agent 生成专属搜索查询并并行执行 ──
+        # ═══════════════════════════════════════════════════════════════
+        # 联网搜索：基于文档简报 + 用户原始问题 → 精准搜索词 → 并行搜索
+        # ═══════════════════════════════════════════════════════════════
         if web_search_enabled:
             self.reporter.update(
                 "Orchestrator", "running",
-                ("正在为各 Agent 生成联网搜索查询..."
-                 if lang == "zh" else
-                 "Generating per-agent web search queries...")
+                ("正在基于文档信息生成搜索查询..."
+                 if lang == "zh" else "Generating search queries from document context...")
             )
             agent_search_queries = self._generate_agent_search_queries(
-                user_query, queries, question_type, doc_type
+                user_query, doc_brief, question_type
             )
-            # 调试：打印生成的搜索词
-            import json
-            print(f"[DEBUG] question_type={question_type}")
             print(f"[DEBUG] search_queries={json.dumps(agent_search_queries, ensure_ascii=False, indent=2)}")
 
             agent_web_results = self._execute_agent_searches(
                 agent_search_queries, api_key
             )
-            # 调试：打印搜索结果摘要
             for key, results in agent_web_results.items():
                 print(f"[DEBUG] {key}: {len(results)} results")
                 for r in results:
-                    print(f"[DEBUG]   - {r.title[:80]}")
-                    print(f"[DEBUG]     snippet={r.snippet[:150]}...")
+                    print(f"[DEBUG]   - {r.title[:80]} | {r.snippet[:100]}...")
+
             searched_agents = [k for k, v in agent_web_results.items() if v]
             if searched_agents:
                 self.reporter.update(
                     "Orchestrator", "done",
                     (f"联网搜索完成：{', '.join(searched_agents)}"
-                     if lang == "zh" else
-                     f"Web search done: {', '.join(searched_agents)}")
+                     if lang == "zh" else f"Web search done: {', '.join(searched_agents)}")
                 )
             else:
                 self.reporter.update(
                     "Orchestrator", "error",
                     ("联网搜索未返回任何结果"
-                     if lang == "zh" else
-                     "Web search returned no results")
+                     if lang == "zh" else "Web search returned no results")
                 )
         else:
             agent_web_results = {}
 
-        # ── 根据问题类型自适应分析深度 ──
-        # factual: 只查数据，精简回答
-        # analytical: 数据+风险+质疑，不要合规审查
-        # comprehensive: 全流程
+        # ═══════════════════════════════════════════════════════════════
+        # 根据问题类型自适应分析深度
+        # ═══════════════════════════════════════════════════════════════
         is_factual = question_type == "factual"
 
         if is_factual:
-            # 精简模式：只跑数据提取，直接给答案
-            msg = ("问题为数据查询，直接提取数据+联网搜索..."
-                   if lang == "zh" and web_search_enabled else
-                   "问题为数据查询，直接提取数据..."
-                   if lang == "zh" else
-                   "Factual query, extracting data + web search..."
-                   if web_search_enabled else
-                   "Factual query, extracting data directly...")
-            self.reporter.update("Orchestrator", "running", msg)
+            self.reporter.update(
+                "Orchestrator", "running",
+                ("数据查询模式：提取文档数据+联网搜索..."
+                 if lang == "zh" and web_search_enabled else
+                 "数据查询模式：提取文档数据..."
+                 if lang == "zh" else
+                 "Factual mode: extracting document + web data..."
+                 if web_search_enabled else
+                 "Factual mode: extracting document data...")
+            )
 
-            data_query = queries.get("data_extractor", user_query)
             data_web_results = agent_web_results.get("data_extractor")
             data_result = self.data_extractor.run(
-                data_query, vector_store, api_key=api_key,
-                enable_search=web_search_enabled,
+                user_query, vector_store, api_key=api_key,
+                doc_brief=doc_brief,
                 web_search_results=data_web_results,
             )
             self._log_agent_result(data_result)
 
-            # 综合：文档数据 + 网络搜索结果
-            self.llm.config.enable_search = web_search_enabled
             final_report = self._synthesize_factual(
                 user_query, data_result, doc_type, on_synthesis_token,
                 web_search_enabled=web_search_enabled,
@@ -178,30 +185,34 @@ class Orchestrator:
                 "execution_log": self.reporter.logs,
             }
 
-        # ── 第一轮：3 Agent 并行 ──
-        msg = ("启动第一轮分析：数据提取、风险评估、合规审查并行执行..."
-               if lang == "zh" else
-               "Round 1: Agents analyzing with role-specific instructions...")
-        if web_search_enabled:
-            msg += ("（各Agent使用专属联网搜索结果）"
-                    if lang == "zh" else
-                    " (each agent uses its own web search results)")
-        self.reporter.update("Orchestrator", "running", msg)
+        # ═══════════════════════════════════════════════════════════════
+        # 第一轮：3 Agent 并行（各自拿到原始问题+文档简报+专属搜索结果）
+        # ═══════════════════════════════════════════════════════════════
+        self.reporter.update(
+            "Orchestrator", "running",
+            ("启动第一轮分析：各Agent独立检索文档并分析..."
+             if lang == "zh" else
+             "Round 1: Agents independently searching document and analyzing...")
+        )
 
         round1_results = self._run_parallel_with_queries(
             [self.data_extractor, self.risk_assessor, self.compliance],
-            queries, vector_store, api_key,
-            enable_search=web_search_enabled,
+            user_query, vector_store, api_key,
+            doc_brief=doc_brief,
             agent_web_results=agent_web_results,
         )
 
         data_result, risk_result, compliance_result = round1_results
 
-        # ── 第二轮：深度质疑 ──
-        msg2 = ("正在审阅前三方分析结果，寻找盲点和矛盾..."
-                if lang == "zh" else
-                "Devil's Advocate reviewing all outputs for blind spots...")
-        self.reporter.update("Devil's Advocate", "running", msg2)
+        # ═══════════════════════════════════════════════════════════════
+        # 第二轮：深度质疑
+        # ═══════════════════════════════════════════════════════════════
+        self.reporter.update(
+            "Devil's Advocate", "running",
+            ("正在审阅前三方分析结果，寻找盲点和矛盾..."
+             if lang == "zh" else
+             "Devil's Advocate reviewing all outputs for blind spots...")
+        )
 
         other_context = {
             self.data_extractor.prompt_file: data_result.content if data_result.success else f"[Failed] {data_result.error}",
@@ -210,10 +221,10 @@ class Orchestrator:
         }
 
         devil_result = self.devils_advocate.run(
-            queries.get("devils_advocate", user_query), vector_store,
+            user_query, vector_store,
             context_from_other_agents=other_context,
             api_key=api_key,
-            enable_search=web_search_enabled,
+            doc_brief=doc_brief,
             web_search_results=agent_web_results.get("devils_advocate"),
         )
         self._log_agent_result(devil_result)
@@ -262,212 +273,197 @@ class Orchestrator:
     # 内部 — 问题转述
     # ----------------------------------------------------------------
 
-    def _reformulate_per_agent(self, user_query: str) -> tuple[dict[str, str], str]:
-        """为每个 Agent 生成针对其角色的专属转述问题。
+    # ----------------------------------------------------------------
+    # 内部 — 文档扫描
+    # ----------------------------------------------------------------
 
-        Returns:
-            (queries_dict, question_type)
-            question_type: "factual" | "analytical" | "comprehensive"
+    def _scan_document_brief(self, vector_store: VectorStore,
+                             api_key: str, doc_type: str = "") -> str:
+        """第零轮：快速扫描文档，提取关键实体信息。
+
+        不分析、不判断——只提取客观事实：公司名、代码、行业、报告期等。
+        产出"文档简报"，后续搜索词生成和Agent分析都基于这份简报。
         """
         lang = self.language
 
-        # 先判断问题类型
-        qt_prompt = (
-            f"判断以下用户问题属于哪种类型，只输出一个词（factual/analytical/comprehensive）：\n\n"
-            f"factual = 查询具体数据（如\"利润多少\"\"营收增长了多少\"\"资产负债率是多少\"）\n"
-            f"analytical = 分析特定方面（如\"偿债能力如何\"\"有没有合规风险\"\"为什么毛利率下降\"）\n"
-            f"comprehensive = 全面评估（如\"做个风险评估\"\"全面分析这家公司\"\"有没有问题\"）\n\n"
-            f"用户问题：{user_query}\n\n类型："
-            if lang == "zh" else
-            f"Classify this user question. Output one word:\n\n"
-            f"factual = asking for specific data (e.g., 'what is the profit', 'how much did revenue grow')\n"
-            f"analytical = analyzing a specific aspect (e.g., 'how is debt capacity', 'any compliance risks')\n"
-            f"comprehensive = full assessment (e.g., 'do a risk assessment', 'analyze this company')\n\n"
-            f"Question: {user_query}\n\nType:"
+        # 取文档前部最有信息量的片段
+        sample = vector_store.search(
+            "公司 名称 证券 简称 股票 代码 行业 业务 主营 报告期 年度 股东",
+            top_k=6, api_key=api_key
         )
-        try:
-            qt_resp = self.llm.chat(
-                [{"role": "user", "content": qt_prompt}],
-                model="qwen-turbo", temperature=0.0, max_tokens=20,
-            )
-            qt = qt_resp.strip().lower()
-            if "factual" in qt:
-                question_type = "factual"
-            elif "analytical" in qt:
-                question_type = "analytical"
-            else:
-                question_type = "comprehensive"
-        except Exception:
-            question_type = "comprehensive"
-
-        role_hints = {
-            "data_extractor": (
-                "这个Agent的职责是从文档中提取结构化财务数据。"
-                "转述时要强调：需要哪些具体数据、从哪些章节找、数据格式要求。"
-                if lang == "zh" else
-                "This agent extracts structured financial data. Emphasize: what data, which sections, format."
-            ),
-            "risk_assessor": (
-                "这个Agent的职责是从四个维度评估风险。"
-                "转述时要强调：关注哪些风险信号、每个维度需要什么证据、风险传导机制。"
-                if lang == "zh" else
-                "This agent assesses risk across four dimensions. Emphasize: risk signals, evidence needed, transmission mechanisms."
-            ),
-            "compliance_checker": (
-                "这个Agent的职责是对照监管框架审查合规问题。"
-                "转述时要强调：适用的法规框架、需要逐条检查的披露项、区分'违规'和'需关注'。"
-                if lang == "zh" else
-                "This agent checks regulatory compliance. Emphasize: applicable frameworks, disclosure items to check, violation vs concern."
-            ),
-            "devils_advocate": (
-                "这个Agent的职责是挑战其他Agent的结论，寻找盲点。"
-                "转述时要强调：质疑的角度（数据/假设/逻辑/遗漏/时间）、要求找出矛盾。"
-                if lang == "zh" else
-                "This agent challenges other agents' conclusions. Emphasize: angles of challenge, find contradictions."
-            ),
-        }
+        context = "\n\n".join(c.chunk.text[:500] for c in sample)[:4000]
 
         if lang == "zh":
-            prompt = f"""你是一个分析策略制定专家。用户向一个金融文档分析系统提出了问题。系统有4个专业Agent，每个Agent的能力不同。请你为每个Agent制定专属的分析指引。
+            prompt = f"""从以下文档片段中提取关键信息。只输出事实，不要推测。找不到的写"未知"。
 
-## 用户问题
-{user_query}
+## 文档片段
+{context}
 
-## 各Agent角色说明及转述要求
-
-"""
-            for key, hint in role_hints.items():
-                prompt += f"### {key}\n{hint}\n\n"
-
-            prompt += """请输出每个Agent的专属分析指引，格式：
-data_extractor: [转述后的分析任务]
-risk_assessor: [转述后的分析任务]
-compliance_checker: [转述后的分析任务]
-devils_advocate: [转述后的分析任务]
-
-注意：每个指引要具体、与该Agent的能力匹配、明确告知Agent应该做什么和怎么做。"""
+## 提取以下信息：
+- 主体公司全称：
+- 股票代码（如有）：
+- 所属行业：
+- 主营业务（一句话）：
+- 文档类型（年报/半年报/季报/招股书/募集说明书/其他）：
+- 报告期（如"截至202X年X月X日"）：
+- 文档中最新的财务数据属于哪个期间："""
         else:
-            prompt = f"""You are an analysis strategy expert. A user asked a question to a financial document analysis system with 4 specialized agents. Create tailored analysis directives for each agent.
+            prompt = f"""Extract key information from the document excerpts below. Facts only, no speculation. Write "Unknown" if not found.
 
-## User Question
-{user_query}
+## Document Excerpts
+{context}
 
-## Agent Roles
-"""
-            for key, hint in role_hints.items():
-                prompt += f"### {key}\n{hint}\n\n"
+## Extract:
+- Entity full name:
+- Stock ticker (if any):
+- Industry:
+- Main business (one sentence):
+- Document type (Annual/Semi-annual/Quarterly/Prospectus/Offering/Other):
+- Reporting period (e.g. "As of June 30, 202X"):
+- Latest financial data period mentioned in the document:"""
 
-            prompt += """Output one directive per agent:
-data_extractor: [directive]
-risk_assessor: [directive]
-compliance_checker: [directive]
-devils_advocate: [directive]"""
+        try:
+            resp = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                model="qwen-turbo", temperature=0.0, max_tokens=300,
+            )
+            brief = resp.strip()
+            if doc_type and doc_type not in brief:
+                brief = f"文档类型：{doc_type}\n{brief}"
+            return brief
+        except Exception:
+            return f"文档（未能自动提取信息）"
 
-        resp = self.llm.chat(
-            [{"role": "user", "content": prompt}],
-            model="qwen-turbo", temperature=0.2, max_tokens=800,
-        )
+    @staticmethod
+    def _classify_question(user_query: str) -> str:
+        """快速分类用户问题类型，不调用 LLM。
 
-        # 解析输出
-        queries = {}
-        for line in resp.strip().split("\n"):
-            line = line.strip()
-            for key in role_hints:
-                if line.startswith(f"{key}:") or line.startswith(f"{key}："):
-                    queries[key] = line.split(":", 1)[-1].split("：", 1)[-1].strip()
-        # fallback
-        for key in role_hints:
-            if key not in queries or not queries[key]:
-                queries[key] = user_query
-        return queries, question_type
+        用关键词规则做粗分类，避免不必要的 API 调用。
+        """
+        q = user_query.strip()
+        # 明显的数据查询
+        data_keywords = [
+            "多少", "是多少", "什么时候", "何时", "哪天",
+            "how much", "how many", "what is", "when",
+        ]
+        if any(kw in q.lower() for kw in data_keywords):
+            # 进一步判断是否只是简单查数据
+            if len(q) < 30 or q.endswith("？") or q.endswith("?"):
+                return "factual"
+
+        # 全面评估请求
+        comprehensive_keywords = [
+            "全面", "综合", "完整", "所有", "全部", "整体",
+            "风险评估", "分析报告", "做个分析",
+            "comprehensive", "full", "complete", "overall",
+            "risk assessment", "analyze everything",
+        ]
+        if any(kw in q.lower() for kw in comprehensive_keywords):
+            return "comprehensive"
+
+        # 默认：分析特定方面
+        return "analytical"
 
     # ----------------------------------------------------------------
     # 内部 — 联网搜索查询生成
     # ----------------------------------------------------------------
 
     def _generate_agent_search_queries(self, user_query: str,
-                                       per_agent_queries: dict[str, str],
-                                       question_type: str,
-                                       doc_type: str = "") -> dict[str, list[str]]:
-        """为每个 Agent 生成两条联网搜索查询：一条找信息、一条交叉验证。
+                                       doc_brief: str,
+                                       question_type: str) -> dict[str, list[str]]:
+        """基于文档简报 + 用户原始问题，为每个 Agent 生成精准搜索词。
 
-        每个 Agent 的搜索方向不同：
-        - 数据提取：搜具体财务数据 → 用另一来源验证数字
-        - 风险评估：搜行业风险/负面新闻 → 搜相反观点/反驳信息
-        - 合规审查：搜监管政策变化 → 搜公司是否有违规记录
-        - 深度质疑：搜争议事件/做空报告 → 搜公司回应/辩解
+        关键改进：现在有了文档简报（公司名/代码/行业/报告期），
+        搜索词不再是瞎子摸象，而是有具体实体的定向搜索。
 
-        Returns:
-            {agent_key: [info_query, verify_query]}
+        每个 Agent 生成 2 条：信息查询 + 交叉验证。
         """
         lang = self.language
 
-        # 数据查询模式：一条找数据、一条验证
         if question_type == "factual":
-            return {"data_extractor": [user_query, f"{user_query} 最新数据 核实"]}
+            # 从文档简报中提取公司名和股票代码，拼入搜索词
+            company_name = ""
+            stock_code = ""
+            for line in doc_brief.split("\n"):
+                line = line.strip().lstrip("- ").strip()
+                if "公司全称" in line or "Entity" in line:
+                    val = line.split("：")[-1].split(":")[-1].strip()
+                    if val and val != "未知":
+                        company_name = val
+                if "股票代码" in line or "Stock" in line:
+                    val = line.split("：")[-1].split(":")[-1].strip()
+                    if val and val != "未知" and val != "无":
+                        stock_code = val
+            entity = stock_code or company_name
+            if entity:
+                return {"data_extractor": [
+                    f"{entity} {user_query}",
+                    f"{entity} 2026 一季度 财报 数据 核实",
+                ]}
+            return {"data_extractor": [user_query, f"{user_query} 2026 最新 数据"]}
 
         if lang == "zh":
-            prompt = f"""你是金融信息检索专家。4个专业Agent即将分析一份金融文档，每个Agent需要联网搜索来获取信息并验证自己判断的准确性。请为每个Agent生成2条搜索查询。
+            prompt = f"""你是金融信息检索专家。以下是用户问题、以及从用户上传的文档中提取的主体信息。请基于这些信息，为4个专业Agent各生成2条精准的联网搜索查询。
 
-## 用户问题
+## 用户原始问题
 {user_query}
 
-## 文档类型
-{doc_type or '未知'}
+## 文档主体信息
+{doc_brief}
 
-## 各Agent的搜索需求（信息 + 验证）
+## 各Agent的搜索目标
 - 数据提取Agent：
-  信息查询：搜索最新的具体财务数据、关键指标、季度/年度财报
-  验证查询：搜另一个来源核实同一数据，确认数字的准确性
+  信息查询：搜索该主体的最新财务数据、关键指标（使用文档简报中的公司名/代码）
+  验证查询：用另一来源核实同一数据
+
 - 风险评估Agent：
-  信息查询：搜索行业风险动态、市场环境变化、负面新闻、经营风险事件
-  验证查询：搜索相反观点或公司正面信息，检验自己的风险判断是否偏颇
+  信息查询：搜索该主体及行业的风险动态、负面新闻、市场变化
+  验证查询：搜索相反观点，检验自己的风险判断是否偏颇
+
 - 合规审查Agent：
-  信息查询：搜索最新的监管政策变化、合规要求更新
-  验证查询：搜索该公司是否有实际违规记录、处罚公告、监管函
+  信息查询：搜索该主体及行业的监管政策变化、合规要求
+  验证查询：搜索该主体是否有实际违规记录、处罚公告
+
 - 深度质疑Agent：
-  信息查询：搜索可能被忽略的风险信号、市场争议、做空报告
-  验证查询：搜索公司对这些质疑的回应、澄清公告
+  信息查询：搜索该主体的争议事件、做空报告、被忽视的风险信号
+  验证查询：搜索公司对这些质疑的回应和澄清
 
 ## 要求
-- 每个Agent生成2条查询，第一条找信息，第二条交叉验证
-- 查询自然语言，10-30字，包含关键实体（公司名/行业/指标）
-- 严格按格式输出（每行一个）：
-data_extractor_info: <信息查询>
-data_extractor_verify: <验证查询>
-risk_assessor_info: <信息查询>
-risk_assessor_verify: <验证查询>
-compliance_checker_info: <信息查询>
-compliance_checker_verify: <验证查询>
-devils_advocate_info: <信息查询>
-devils_advocate_verify: <验证查询>"""
+- **必须使用文档简报中的公司全称/股票代码（如有）构造查询**
+- 每条查询10-30字，自然语言
+- 严格按格式输出：
+data_extractor_info: <查询>
+data_extractor_verify: <查询>
+risk_assessor_info: <查询>
+risk_assessor_verify: <查询>
+compliance_checker_info: <查询>
+compliance_checker_verify: <查询>
+devils_advocate_info: <查询>
+devils_advocate_verify: <查询>"""
         else:
-            prompt = f"""You are a financial information retrieval expert. Generate 2 search queries for each agent: one to find information, one to cross-verify.
+            prompt = f"""You are a financial information retrieval expert. Generate 2 search queries for each agent based on the user's question and document entity information.
 
 ## User Question
 {user_query}
 
-## Document Type
-{doc_type or 'Unknown'}
+## Document Entity Info
+{doc_brief}
 
-## Agent Search Needs (info + verification)
-- Data Extractor: info query for latest financials → verify query to cross-check numbers with another source
-- Risk Assessor: info query for industry risks/negative news → verify query for opposing viewpoints
-- Compliance Checker: info query for regulatory changes → verify query for actual violation records
-- Devil's Advocate: info query for overlooked risks/controversies → verify query for company responses
+## Agent Search Targets
+(same structure as Chinese version)
 
 ## Requirements
-- 2 queries per agent: first for info, second for verification
-- Natural language, include key entities
-- Output format (one per line):
-data_extractor_info: <info query>
-data_extractor_verify: <verify query>
-risk_assessor_info: <info query>
-risk_assessor_verify: <verify query>
-compliance_checker_info: <info query>
-compliance_checker_verify: <verify query>
-devils_advocate_info: <info query>
-devils_advocate_verify: <verify query>"""
+- **Must use entity names/tickers from the document brief**
+- 10-20 words per query
+- Output format:
+data_extractor_info: <query>
+data_extractor_verify: <query>
+risk_assessor_info: <query>
+risk_assessor_verify: <query>
+compliance_checker_info: <query>
+compliance_checker_verify: <query>
+devils_advocate_info: <query>
+devils_advocate_verify: <query>"""
 
         key_map = {
             "data_extractor_info": "data_extractor",
@@ -486,10 +482,8 @@ devils_advocate_verify: <verify query>"""
                 model="qwen-turbo", temperature=0.1, max_tokens=600,
             )
         except Exception:
-            return {k: [user_query] for k in
-                    ["data_extractor", "risk_assessor", "compliance_checker", "devils_advocate"]}
+            return {k: [user_query] for k in key_map.values()}
 
-        # 解析：同一 agent 的两条查询合并到同一个 list
         queries: dict[str, list[str]] = {}
         for line in resp.strip().split("\n"):
             line = line.strip()
@@ -499,8 +493,7 @@ devils_advocate_verify: <verify query>"""
                     if q and len(q) > 2:
                         queries.setdefault(key, []).append(q)
 
-        # 补全缺失的 Agent
-        for key in ["data_extractor", "risk_assessor", "compliance_checker", "devils_advocate"]:
+        for key in set(key_map.values()):
             if key not in queries or not queries[key]:
                 queries[key] = [user_query]
 
@@ -539,56 +532,21 @@ devils_advocate_verify: <verify query>"""
 
         return all_results
 
-    def _reformulate_query(self, user_query: str) -> str:
-        """理解并转述用户问题：明确问什么、需要什么信息、好答案长什么样。"""
-        lang = self.language
-        if lang == "zh":
-            prompt = f"""你是一个问题分析专家。用户在向一个金融文档分析系统提问。请你理解用户的问题，然后做三件事：
-
-1. **问题澄清**：用户到底想知道什么？用一句话说清楚。
-2. **信息需求**：要回答这个问题，需要从文档中提取哪些具体信息？（列出3-5项）
-3. **分析指引**：转述为一个清晰的分析任务，指导下游的分析Agent应该做什么、怎么回答。
-
-注意：
-- 不要回答用户的问题，只做理解和转述
-- 如果用户问的是具体数据（如"利润多少"），指引要强调"直接提取数据、标注来源"
-- 如果用户问的是风险评估，指引要强调"从多个维度分析、引用证据"
-- 转述后的任务描述要明确告诉Agent：回答要精准、简洁、每条信息标注出处
-
-用户问题：{user_query}
-
-请输出（格式：先一句话澄清 → 列出需要的信息 → 给出分析指引）："""
-
-        else:
-            prompt = f"""You are a question analysis expert. A user is asking a question to a financial document analysis system. Understand the question and do three things:
-
-1. **Clarification**: What exactly does the user want to know? State in one sentence.
-2. **Information needs**: What specific information from the document is needed to answer? (List 3-5 items)
-3. **Analysis directive**: Reformulate as a clear analysis task, guiding downstream agents on what to do and how to answer.
-
-Note:
-- Do NOT answer the user's question. Only understand and reformulate.
-- If asking for specific data (e.g., "what's the profit"), emphasize: extract data directly, cite sources.
-- If asking for risk assessment, emphasize: analyze from multiple dimensions, cite evidence.
-- The reformulated task should tell agents: be precise, be concise, cite sources for every fact.
-
-User question: {user_query}
-
-Output (clarification → information needs → analysis directive):"""
-
-        return self.llm.chat(
-            [{"role": "user", "content": prompt}],
-            model="qwen-turbo", temperature=0.1, max_tokens=600,
-        )
-
-    def _run_parallel_with_queries(self, agents: list, queries: dict,
+    def _run_parallel_with_queries(self, agents: list,
+                                    user_query: str,
                                     store: VectorStore, api_key: str,
-                                    enable_search: bool = False,
+                                    doc_brief: str = "",
                                     agent_web_results: dict | None = None
                                     ) -> list[AgentResult]:
-        """并行执行多个 Agent，各自使用专属转述问题 + 专属联网搜索结果。"""
+        """并行执行多个 Agent。
+
+        每个 Agent 拿到：
+        - 用户原始问题（不转义）
+        - 文档简报（公司名/代码/行业/报告期）
+        - 自己专属的联网搜索结果
+        - 向量库（Agent 自己搜文档）
+        """
         results: list[AgentResult] = []
-        # agent → query 映射
         agent_key_map = {
             self.data_extractor: "data_extractor",
             self.risk_assessor: "risk_assessor",
@@ -599,14 +557,11 @@ Output (clarification → information needs → analysis directive):"""
             futures = {}
             for agent in agents:
                 agent_key = agent_key_map.get(agent, "")
-                agent_query = queries.get(agent_key, "")
-                if not agent_query:
-                    agent_query = list(queries.values())[0] if queries else ""
                 web_results = (agent_web_results or {}).get(agent_key)
                 futures[
                     executor.submit(
-                        agent.run, agent_query, store, None, 20, api_key,
-                        enable_search, web_results
+                        agent.run, user_query, store, None, 20, api_key,
+                        doc_brief, web_results
                     )
                 ] = agent
             for future in concurrent.futures.as_completed(futures):
@@ -621,8 +576,8 @@ Output (clarification → information needs → analysis directive):"""
                            AgentResult(agent.name, success=False, error="未返回结果")))
         return ordered
 
-    def _run_parallel(self, agents: list, query: str, store: VectorStore,
-                      api_key: str, enable_search: bool = False,
+    def _run_parallel(self, agents: list, user_query: str, store: VectorStore,
+                      api_key: str, doc_brief: str = "",
                       agent_web_results: dict | None = None) -> list[AgentResult]:
         """并行执行多个 Agent（使用相同 query，兼容旧调用）。"""
         results: list[AgentResult] = []
@@ -640,8 +595,8 @@ Output (clarification → information needs → analysis directive):"""
                 )
                 futures[
                     executor.submit(
-                        agent.run, query, store, None, 20, api_key,
-                        enable_search, web_results
+                        agent.run, user_query, store, None, 20, api_key,
+                        doc_brief, web_results
                     )
                 ] = agent
             for future in concurrent.futures.as_completed(futures):
@@ -649,7 +604,6 @@ Output (clarification → information needs → analysis directive):"""
                 results.append(result)
                 self._log_agent_result(result)
 
-        # 保持原始顺序
         ordered = []
         agent_map = {r.agent_name: r for r in results}
         for agent in agents:
@@ -749,10 +703,11 @@ Output (clarification → information needs → analysis directive):"""
 
 请从以上信息中提取答案。严格按以下规则：
 1. **第一句话直接给出具体数字和单位**，不要任何铺垫
-2. **从搜索结果中直接复制数字**——不要修改、不要换算、不要凭记忆补充。搜索结果里有194.96亿就写194.96亿，不要改
-3. 同时列出文档数据和网络数据，标注来源
-4. 如果搜索结果中的数字互不一致，列出所有版本并标注哪个来源
-5. 控制在10行以内"""
+2. **从搜索结果中直接复制数字，区分清楚每个指标**——营收是营收、净利润是净利润、扣非净利润是扣非净利润，不要混
+3. 如果用户问"利润"/"净利润"但搜索结果同时有营收和净利，只答净利润，不要答营收
+4. 同时列出文档数据和网络数据，标注来源
+5. 如果搜索结果中的数字互不一致，列出所有版本
+6. 控制在10行以内"""
             else:
                 content = f"""Today is {today}.
 

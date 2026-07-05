@@ -94,23 +94,27 @@ class BaseAgent(ABC):
     def run(self, user_query: str, vector_store: VectorStore,
             context_from_other_agents: dict[str, str] | None = None,
             top_k: int = 20, api_key: str = "",
-            enable_search: bool = False,
+            doc_brief: str = "",
             web_search_results: list | None = None) -> AgentResult:
         """
         执行 Agent：
-          1. RAG 检索相关文档
-          2. 构建消息（system prompt + 检索上下文 + 用户问题）
-          3. 调用 LLM（如 enable_search=True，LLM 自动联网搜索）
-          4. 后处理 + 返回
+
+        每个 Agent 收到：
+          - user_query：用户原始问题（不转义）
+          - vector_store：自行 RAG 检索文档
+          - doc_brief：文档简报（公司名/代码/行业/报告期）
+          - web_search_results：自己的联网搜索结果
+
+        Agent 自己决定如何组合这些信息来回答问题。
         """
         try:
-            # 1. RAG 检索 + 表格匹配
+            # 1. RAG 检索 + 表格匹配（Agent 用自己的视角搜文档）
             rag_results, tables = self._retrieve(user_query, vector_store, top_k, api_key)
 
-            # 2. 构建消息
+            # 2. 构建消息（system prompt + 简报 + 检索上下文 + 联网结果 + 用户问题）
             messages = self._build_messages(user_query, rag_results, tables,
                                             context_from_other_agents,
-                                            web_search_results)
+                                            web_search_results, doc_brief)
 
             # 3. 调用 LLM（搜索已由 DDGS 完成，不再传 enable_search）
             raw_output = self.llm.chat(messages)
@@ -148,10 +152,17 @@ class BaseAgent(ABC):
 
     def _build_messages(self, query: str, rag_results: list[RetrievalResult],
                         tables: list, other_context: dict[str, str] | None,
-                        web_results: list | None = None) -> list[dict]:
+                        web_results: list | None = None,
+                        doc_brief: str = "") -> list[dict]:
         parts = [self.system_prompt]
 
-        # 注入联网搜索结果（放在文档片段之前，要求Agent使用和验证）
+        # 注入文档简报（Orchestrator 第零轮产出）
+        if doc_brief:
+            parts.append(
+                f"\n\n## 📋 文档简报（从用户上传文件中提取）\n\n{doc_brief}"
+            )
+
+        # 注入联网搜索结果（要求Agent使用和验证）
         if web_results:
             web_lines = [
                 "\n\n## 🌐 联网搜索结果（真实搜索引擎返回的最新信息）\n",
