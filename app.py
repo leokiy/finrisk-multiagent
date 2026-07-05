@@ -830,7 +830,7 @@ if st.session_state.file_processed:
                         st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
                     else:
                         st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
-
+        st.rerun()
 else:
     # 未上传文件时显示欢迎信息
     st.divider()
