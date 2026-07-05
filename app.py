@@ -817,7 +817,6 @@ if st.session_state.file_processed:
         followups = result.get("followup_questions", [])
         if followups and len(followups) >= 2:
             st.session_state.doc_questions = followups
-            st.session_state._last_followups = followups
 
         # 显示各 Agent 的详细输出（可折叠）
         with st.expander(t("detail_title"), expanded=False):
@@ -842,10 +841,12 @@ if st.session_state.file_processed:
                     else:
                         st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
 
-    # ── 兜底刷新推荐问题 ──
+    # ── 兜底刷新推荐问题（仅值变化时更新，避免无限rerun）──
     last = st.session_state.get("last_analysis")
     if last and last.get("followup_questions"):
-        st.session_state.doc_questions = last["followup_questions"]
+        new_qs = last["followup_questions"]
+        if new_qs != st.session_state.get("doc_questions"):
+            st.session_state.doc_questions = new_qs
 
 else:
     # 未上传文件时显示欢迎信息
