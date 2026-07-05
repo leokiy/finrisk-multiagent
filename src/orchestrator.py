@@ -281,7 +281,6 @@ class Orchestrator:
         return {
             "query": user_query,
             "question_type": question_type,
-            "refined_query":      queries.get("data_extractor", user_query),
             "data_extraction":    self._safe_result(data_result),
             "risk_assessment":    self._safe_result(risk_result),
             "compliance_check":   self._safe_result(compliance_result),
@@ -633,33 +632,30 @@ devils_advocate_verify: <query>"""
                            AgentResult(agent.name, success=False, error="未返回结果")))
         return ordered
 
-    def _synthesize(self, user_query: str, refined_query: str,
+    def _synthesize(self, user_query: str,
                     data: AgentResult, risk: AgentResult,
                     compliance: AgentResult, devil: AgentResult) -> str:
         """调用 LLM 综合所有 Agent 的输出，生成最终报告。"""
         messages = self._build_synthesis_messages(
-            user_query, refined_query, data, risk, compliance, devil)
+            user_query, data, risk, compliance, devil)
         return self.llm.chat(messages)
 
-    def _synthesize_stream(self, user_query: str, refined_query: str,
+    def _synthesize_stream(self, user_query: str,
                            data: AgentResult, risk: AgentResult,
                            compliance: AgentResult, devil: AgentResult,
                            on_token=None) -> str:
         """流式版本——每个 token 通过 on_token 回调推送。"""
         messages = self._build_synthesis_messages(
-            user_query, refined_query, data, risk, compliance, devil)
+            user_query, data, risk, compliance, devil)
         if on_token:
             return self.llm.chat_stream(messages, on_token=on_token)
         return self.llm.chat(messages)
 
-    def _build_synthesis_messages(self, user_query: str, refined_query: str,
+    def _build_synthesis_messages(self, user_query: str,
                                   data: AgentResult, risk: AgentResult,
                                   compliance: AgentResult, devil: AgentResult) -> list[dict]:
         content = f"""## 用户原始问题
 {user_query}
-
-## 问题理解与转述
-{refined_query}
 
 ## 📊 数据提取 Agent 输出
 {data.content if data.success else f'[执行失败: {data.error}]'}
