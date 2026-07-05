@@ -24,10 +24,12 @@ FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaborati
 ### 核心特色
 
 - 🧠 **Multi-Agent 协作**: 不是单模型"一问一答"，而是 4 个专业化 Agent 分工协作
-- 📎 **RAG 文档检索**: 基于 FAISS 向量库 + DashScope Embedding，从上传的 PDF 中精准检索相关段落
+- 📎 **RAG 文档检索**: 基于 FAISS 向量库 + DashScope Embedding，从上传的 PDF 中精准检索相关段落，支持全量表格提取
 - 🔍 **Devil's Advocate 机制**: 内置"魔鬼代言人"Agent，专门挑战其他 Agent 的结论，防止盲点
+- 🌐 **Agent 级联网搜索**: 每个 Agent 独立调用 DashScope 内置搜索（enable_search），当文档信息不足时自主联网补充最新行业数据、新闻和监管动态
 - 🔑 **用户自有 API Key**: 不内置任何密钥，用户完全掌控自己的 API 使用
 - 📊 **结构化输出**: 四维风险矩阵（市场/信用/流动/操作与治理）+ 合规审查清单 + 可操作建议
+- ⚡ **流式输出**: 最终报告逐字实时生成，无需等待全部完成
 
 ---
 
@@ -67,11 +69,18 @@ FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaborati
 
 ### 工作流程
 
+```
+📄 上传文档 → 📂 处理文档(PDF解析·表格提取·向量化) → 🔍 理解问题(查询转述)
+   → 🤖 Agent 并行分析(3 Agent + 各自联网搜索) → ⚖️ 质疑与裁决(Devil's Advocate)
+   → 📊 流式生成报告(逐字实时输出)
+```
+
 | 阶段 | 做什么 | 并行/串行 |
 |------|--------|:--:|
-| **第一轮** | 数据提取、风险评估、合规审查 3 个 Agent 并行执行 | 并行 ⚡ |
-| **第二轮** | 深度质疑 Agent 看到前三方的输出后，进行挑战性审阅 | 串行（依赖第一轮） |
-| **第三轮** | 协调 Agent 综合所有输出，处理矛盾，生成最终报告 | 串行 |
+| **第零轮** | 问题理解与转述——明确分析目标 | 串行 |
+| **第一轮** | 数据提取、风险评估、合规审查 3 个 Agent 并行执行，各自可联网搜索补充信息 | 并行 ⚡ |
+| **第二轮** | 深度质疑 Agent 看到前三方的输出后，进行挑战性审阅（也可联网搜索反向证据） | 串行 |
+| **第三轮** | 协调 Agent 综合所有输出，处理矛盾，流式生成最终报告 | 串行 |
 
 ### 四个专业 Agent
 
@@ -151,9 +160,11 @@ finrisk-multiagent/
 │   │   ├── compliance_checker.py # 📋 合规审查 Agent
 │   │   └── devils_advocate.py  # 🔍 深度质疑 Agent
 │   ├── rag/
-│   │   └── engine.py           # RAG 模块：PDF 加载 · 文本分块 · Embedding · FAISS
+│   │   └── engine.py           # RAG 模块：PDF 加载 · 文本分块 · 全量表格提取 · Embedding · FAISS
+│   ├── search/
+│   │   └── web_search.py       # 联网搜索：DashScope enable_search（Agent 自主触发）
 │   └── llm/
-│       └── client.py           # LLM 客户端：DashScope + OpenAI 兼容双模式
+│       └── client.py           # LLM 客户端：DashScope + OpenAI 兼容双模式 · 流式输出
 │
 ├── prompts/                    # 📝 Prompt 模板（Markdown 格式，易于修改）
 │   ├── data_extractor.md       # 数据提取 Agent 的 system prompt
@@ -173,11 +184,12 @@ finrisk-multiagent/
 | 层级 | 技术 | 说明 |
 |------|------|------|
 | **前端** | Streamlit | 纯 Python Web UI，零前端代码 |
-| **LLM** | DashScope (Qwen) / OpenAI 兼容 | 用户自选 API，支持 qwen-plus/max/turbo |
-| **RAG** | FAISS + DashScope Embedding | 本地向量存储，无需数据库 |
-| **文档处理** | pdfplumber + LangChain | PDF 文本提取 + 递归语义分块 |
+| **LLM** | DashScope (Qwen) / OpenAI 兼容 | 用户自选 API，支持 qwen-turbo/plus/max |
+| **RAG** | FAISS + DashScope Embedding | 本地向量存储，全量 PDF 表格提取 |
+| **联网搜索** | DashScope enable_search | Agent 自主触发，文档信息不足时自动补充 |
+| **文档处理** | pdfplumber + LangChain | PDF 文本提取 + 递归语义分块 + 表格结构化 |
 | **Agent 框架** | 自研轻量框架 | 不依赖 LangChain Agent / AutoGen，完全可控 |
-| **并行调度** | concurrent.futures | 标准库，无额外依赖 |
+| **并行调度** | concurrent.futures | 标准库，3 Agent 并行 + 流式输出 |
 
 ### 为什么不用 LangChain Agent / AutoGen / CrewAI？
 
@@ -232,6 +244,7 @@ finrisk-multiagent/
 | **信用评估** | 评估债券发行人的信用风险 |
 | **合规自查** | 对照监管框架检查信息披露的完整性 |
 | **监管科技** | 辅助监管机构进行信息披露合规检查和风险筛查 |
+| **投后监控** | 定期跟踪持仓标的财务状况，结合联网搜索获取最新行业动态和风险事件 |
 
 ---
 
