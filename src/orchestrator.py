@@ -15,6 +15,11 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+import sys as _sys
+_LOAD_MARKER = "=== ORCHESTRATOR V2.0 LOADED === (doc_brief + ddgs)"
+_sys.stderr.write(f"\n{_LOAD_MARKER}\n")
+_sys.stderr.flush()
+
 from src.llm.client import LLMClient, LLMConfig
 from src.rag.engine import VectorStore
 from src.agents.base import AgentResult, _load_prompt

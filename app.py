@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Streamlit 每次 rerun 都重新执行 app.py，但 Python 的 sys.modules 会缓存
+# 已导入的模块。强制清除项目源码模块的缓存，确保每次运行都是最新代码。
+_PROJECT_MODULES = [m for m in sys.modules if m.startswith("src.")]
+for _m in _PROJECT_MODULES:
+    del sys.modules[_m]
+
 import streamlit as st
 
 # ============================================================================
