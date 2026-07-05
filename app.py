@@ -702,28 +702,25 @@ if st.session_state.file_processed:
 
 if st.session_state.file_processed:
 
-    # ── 推荐提问刷新：直接比对 last_analysis 和 doc_questions ──
+    # ── 推荐提问：last_analysis 有追问就用追问，否则用初始问题 ──
     last = st.session_state.get("last_analysis")
     if last and last.get("followup_questions"):
-        fups = last["followup_questions"]
-        if fups != st.session_state.get("doc_questions"):
-            st.session_state.doc_questions = fups
-
-    # 首次：基于文档生成初始推荐提问
-    if (st.session_state.get("doc_questions") is None
-            and st.session_state.vector_store is not None
-            and api_key):
-        with st.spinner("🔍 " + ("正在分析文档，生成推荐提问..." if st.session_state.language == "zh" else "Analyzing document...")):
-            try:
-                st.session_state.doc_questions = _generate_doc_questions(
-                    st.session_state.vector_store, api_key,
-                    st.session_state.language,
-                    st.session_state.get("_uploaded_filename", "document"),
-                )
-            except Exception:
-                st.session_state.doc_questions = t("quick_questions")
-
-    quick_questions = st.session_state.get("doc_questions") or t("quick_questions")
+        quick_questions = last["followup_questions"]
+    elif st.session_state.get("doc_questions"):
+        quick_questions = st.session_state["doc_questions"]
+    else:
+        # 首次：基于文档生成初始推荐提问
+        if st.session_state.vector_store and api_key:
+            with st.spinner("🔍 " + ("正在分析文档，生成推荐提问..." if st.session_state.language == "zh" else "Analyzing document...")):
+                try:
+                    st.session_state.doc_questions = _generate_doc_questions(
+                        st.session_state.vector_store, api_key,
+                        st.session_state.language,
+                        st.session_state.get("_uploaded_filename", "document"),
+                    )
+                except Exception:
+                    st.session_state.doc_questions = t("quick_questions")
+        quick_questions = st.session_state.get("doc_questions") or t("quick_questions")
 
     # 输入区
     user_query = st.chat_input(t("chat_placeholder"))
