@@ -192,6 +192,13 @@ class Orchestrator:
             self.reporter.update("Orchestrator", "done",
                                  "分析完成。" if lang == "zh" else "Analysis complete.")
 
+            followup = self._generate_followup_questions(
+                user_query, final_report
+            )
+            self.reporter.update("Orchestrator", "done",
+                                 f"追问生成: {len(followup)}条"
+                                 if lang == "zh" else f"Followups: {len(followup)}")
+
             return {
                 "query": user_query,
                 "question_type": "factual",
@@ -201,6 +208,7 @@ class Orchestrator:
                 "devils_advocate": "",
                 "rebuttals": {},
                 "final_report": final_report,
+                "followup_questions": followup,
                 "execution_log": self.reporter.logs,
             }
 
@@ -297,6 +305,8 @@ class Orchestrator:
         self.reporter.update("Orchestrator", "done",
                              "分析完成。" if lang == "zh" else "Analysis complete.")
 
+        followup = self._generate_followup_questions(user_query, final_report)
+
         return {
             "query": user_query,
             "question_type": question_type,
@@ -306,12 +316,76 @@ class Orchestrator:
             "devils_advocate":    self._safe_result(devil_result) if devil_result else "",
             "rebuttals":          {k: v.content for k, v in rebuttals.items()},
             "final_report":       final_report,
+            "followup_questions": followup,
             "execution_log":      self.reporter.logs,
         }
 
     # ----------------------------------------------------------------
     # 内部 — 问题转述
     # ----------------------------------------------------------------
+
+    # ----------------------------------------------------------------
+    # 内部 — 文档扫描
+    # ----------------------------------------------------------------
+
+    def _generate_followup_questions(self, user_query: str,
+                                      analysis_summary: str,
+                                      count: int = 4) -> list[str]:
+        """基于当前分析结果，生成值得追问的问题。
+
+        在每次分析完成后调用，帮助用户深入探索。
+        问题应该：紧跟前一轮发现、覆盖不同角度、具体可操作。
+        """
+        lang = self.language
+
+        summary = analysis_summary[:1500] if analysis_summary else ""
+        if not summary.strip():
+            return []
+
+        if lang == "zh":
+            prompt = f"""基于以下对话上下文，生成{count}个值得继续追问的问题。
+
+## 用户刚才问了
+{user_query}
+
+## 系统的分析结论（摘要）
+{summary}
+
+## 要求
+- 问题要紧跟分析中发现的关键信号、风险点或数据异常
+- 覆盖不同角度（数据核实、风险深挖、合规排查、行业对比等）
+- 每个问题不超过20字
+- 直接输出问题列表，每行一个，以"- "开头"""
+        else:
+            prompt = f"""Based on the following context, generate {count} follow-up questions.
+
+## User's question
+{user_query}
+
+## Analysis summary
+{summary}
+
+## Requirements
+- Questions should follow up on key findings, risks, or anomalies
+- Cover different angles
+- Under 12 words each
+- Output as list, one per line, starting with "- \""""
+
+        try:
+            resp = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                model="qwen-turbo", temperature=0.4, max_tokens=300,
+            )
+        except Exception:
+            return []
+
+        questions = []
+        for line in resp.strip().split("\n"):
+            line = line.strip().lstrip("- ").lstrip("0123456789. ").strip()
+            if line and len(line) > 3:
+                questions.append(line)
+
+        return questions[:count]
 
     # ----------------------------------------------------------------
     # 内部 — 文档扫描

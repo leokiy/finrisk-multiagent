@@ -814,6 +814,11 @@ if st.session_state.file_processed:
         st.session_state.chat_history.append({"role": "assistant", "content": report})
         st.session_state.last_analysis = result
 
+        # 用 Orchestrator 生成的追问实时刷新推荐问题
+        followups = result.get("followup_questions", [])
+        if followups:
+            st.session_state.doc_questions = followups
+
         # 显示各 Agent 的详细输出（可折叠）
         with st.expander(t("detail_title"), expanded=False):
             tab_labels = t("detail_tabs")
