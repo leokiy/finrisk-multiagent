@@ -453,6 +453,8 @@ if "language" not in st.session_state:
     st.session_state.language = "zh"
 if "_qkey" not in st.session_state:
     st.session_state._qkey = 0
+if "_refresh_questions" not in st.session_state:
+    st.session_state._refresh_questions = False
 
 # ============================================================================
 # 侧边栏 — 配置
@@ -704,8 +706,17 @@ if st.session_state.file_processed:
     if st.session_state.get("_refresh_questions"):
         st.session_state._refresh_questions = False
         last = st.session_state.get("last_analysis")
-        if last and last.get("followup_questions"):
-            st.session_state.doc_questions = last["followup_questions"]
+        fups = last.get("followup_questions", []) if last else []
+        st.sidebar.write(f"DEBUG: refresh=True, fups={len(fups)}")
+        if fups:
+            st.session_state.doc_questions = fups
+            st.sidebar.write(f"DEBUG: doc_questions updated to {fups}")
+    else:
+        fups_debug = []
+        last_debug = st.session_state.get("last_analysis")
+        if last_debug:
+            fups_debug = last_debug.get("followup_questions", [])
+        st.sidebar.write(f"DEBUG: refresh=False, last_analysis_fups={len(fups_debug)}, doc_q={st.session_state.get('doc_questions')}")
 
     # 首次：基于文档生成初始推荐提问
     if (st.session_state.get("doc_questions") is None
