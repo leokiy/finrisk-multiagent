@@ -807,8 +807,11 @@ if st.session_state.file_processed:
 
         st.session_state.chat_history.append({"role": "assistant", "content": report})
         st.session_state.last_analysis = result
+        st.rerun()
 
-        # 显示各 Agent 的详细输出（可折叠）
+    # ── Agent 详情 expander（独立于 user_query，基于 last_analysis 渲染）──
+    if st.session_state.get("last_analysis"):
+        result = st.session_state.last_analysis
         with st.expander(t("detail_title"), expanded=False):
             tab_labels = t("detail_tabs")
             tabs = st.tabs(tab_labels)
@@ -830,7 +833,6 @@ if st.session_state.file_processed:
                         st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
                     else:
                         st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
-        st.rerun()
 else:
     # 未上传文件时显示欢迎信息
     st.divider()
