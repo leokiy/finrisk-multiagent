@@ -87,6 +87,8 @@ class Orchestrator:
         """
         self.reporter.clear()
         lang = self.language
+        self.reporter.update("Orchestrator", "done",
+                             "=== NEW v2.0 (doc_brief + ddgs) ===")
 
         # ═══════════════════════════════════════════════════════════════
         # 第零轮：扫描文档 → 文档简报
