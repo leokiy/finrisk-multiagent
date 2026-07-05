@@ -488,10 +488,10 @@ with st.sidebar:
     # -- 联网搜索 --
     web_search_enabled = st.checkbox(
         "🌐 联网搜索" if st.session_state.language == "zh" else "🌐 Web Search",
-        value=False,
-        help=("开启后将同步搜索最新行业数据、新闻和监管动态作为分析补充"
+        value=True,
+        help=("默认开启。Agent 会在文档信息不足时自动联网搜索最新数据。"
               if st.session_state.language == "zh"
-              else "Enable to supplement analysis with latest industry data, news, and regulatory updates"),
+              else "On by default. Agents search the web when document info is insufficient."),
     )
 
     st.divider()
@@ -590,7 +590,7 @@ if uploaded_file and not st.session_state.file_processed:
     st.session_state._file_bytes = uploaded_file.getvalue()
     st.session_state._uploaded_filename = uploaded_file.name
 
-    with st.status(t("processing"), expanded=True) as status:
+    with st.status("Processing document...", expanded=True) as status:
         try:
             # 保存到临时文件
             suffix = Path(st.session_state._uploaded_filename).suffix or ".pdf"
@@ -599,10 +599,10 @@ if uploaded_file and not st.session_state.file_processed:
                 tmp_path = tmp.name
 
             # RAG 构建
-            st.write(t("extracting"))
+            st.write("Extracting text...")
             from src.rag.engine import build_rag_from_file
 
-            st.write(t("vectorizing"))
+            st.write("Building vector index...")
             vector_store = build_rag_from_file(
                 tmp_path, api_key=api_key
             )
@@ -640,13 +640,18 @@ if uploaded_file and not st.session_state.file_processed:
             os.unlink(tmp_path)
 
             status.update(
-                label=t("processing_done", count=vector_store.chunk_count,
-                         tables=vector_store.table_count),
+                label=f"Done: {vector_store.chunk_count} chunks, {vector_store.table_count} tables",
                 state="complete",
             )
 
         except Exception as exc:
-            status.update(label=t("processing_fail", error=str(exc)), state="error")
+            # 避免 emoji 在错误消息中触发 latin-1 编码问题
+            import traceback
+            traceback.print_exc()
+            try:
+                status.update(label=f"[ERROR] {str(exc)[:200]}", state="error")
+            except Exception:
+                status.update(label="Processing failed. Check console for details.", state="error")
             st.session_state.processing_file = False
             st.stop()
 
