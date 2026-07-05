@@ -700,11 +700,18 @@ if st.session_state.file_processed:
 
 if st.session_state.file_processed:
 
-    # ── 初始文档扫描：自动生成个性化推荐提问（仅首次）──
+    # ── 推荐提问刷新（在渲染前，确保每次都用最新值）──
+    if st.session_state.get("_refresh_questions"):
+        st.session_state._refresh_questions = False
+        last = st.session_state.get("last_analysis")
+        if last and last.get("followup_questions"):
+            st.session_state.doc_questions = last["followup_questions"]
+
+    # 首次：基于文档生成初始推荐提问
     if (st.session_state.get("doc_questions") is None
             and st.session_state.vector_store is not None
             and api_key):
-        with st.spinner("🔍 " + ("正在分析文档，生成推荐提问..." if st.session_state.language == "zh" else "Analyzing document to generate tailored questions...")):
+        with st.spinner("🔍 " + ("正在分析文档，生成推荐提问..." if st.session_state.language == "zh" else "Analyzing document...")):
             try:
                 st.session_state.doc_questions = _generate_doc_questions(
                     st.session_state.vector_store, api_key,
@@ -722,12 +729,12 @@ if st.session_state.file_processed:
     if "pending_query" in st.session_state:
         user_query = st.session_state.pop("pending_query")
 
-    # ── 聊天记录（先渲染，在上面）──
+    # ── 聊天记录 ──
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # ── 推荐提问（后渲染，在聊天记录下方、输入框上方）──
+    # ── 推荐提问（在聊天记录下方、输入框上方）──
     st.markdown("**" + ("📋 推荐追问:" if st.session_state.language == "zh" else "📋 Follow-up Questions:") + "**")
     qkey = st.session_state.get("_qkey", 0)
     cols = st.columns(len(quick_questions))
@@ -783,19 +790,8 @@ if st.session_state.file_processed:
                 doc_type=st.session_state.get("doc_type", ""),
             )
 
-            # 诊断：直接在报告上方显示搜索状态
-            search_logs = [l for l in result.get("execution_log", [])
-                          if "搜索" in l.get("content", "") or "search" in l.get("content", "").lower()
-                          or "web_search" in l.get("content", "") or "results" in l.get("content", "")]
-            if search_logs:
-                diag = "\n\n".join(f"> {l['content'][:150]}" for l in search_logs)
-            elif web_search_enabled:
-                diag = "> ⚠️ 联网搜索已开启但未产生任何搜索日志"
-            else:
-                diag = "> 🔒 联网搜索未开启"
-
-            report = diag + "\n\n---\n\n" + result.get("final_report", "")
-            if not result.get("final_report"):
+            report = result.get("final_report", "")
+            if not report:
                 fail_msg = ("分析失败，请检查 API Key 和网络连接。"
                            if st.session_state.language == "zh"
                            else "Analysis failed. Please check your API Key and network connection.")
@@ -812,11 +808,7 @@ if st.session_state.file_processed:
 
         st.session_state.chat_history.append({"role": "assistant", "content": report})
         st.session_state.last_analysis = result
-
-        # 用 Orchestrator 生成的追问实时刷新推荐问题
-        followups = result.get("followup_questions", [])
-        if followups and len(followups) >= 2:
-            st.session_state.doc_questions = followups
+        st.session_state._refresh_questions = True  # 下轮 rerun 开头刷新推荐问题
 
         # 显示各 Agent 的详细输出（可折叠）
         with st.expander(t("detail_title"), expanded=False):
@@ -840,13 +832,6 @@ if st.session_state.file_processed:
                         st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
                     else:
                         st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
-
-    # ── 兜底刷新推荐问题（仅值变化时更新，避免无限rerun）──
-    last = st.session_state.get("last_analysis")
-    if last and last.get("followup_questions"):
-        new_qs = last["followup_questions"]
-        if new_qs != st.session_state.get("doc_questions"):
-            st.session_state.doc_questions = new_qs
 
 else:
     # 未上传文件时显示欢迎信息
