@@ -322,74 +322,104 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    /* ── 全局 ── */
     .main-title {
-        font-size: 2.2rem;
-        font-weight: 700;
-        margin-bottom: 0.2rem;
+        font-size: 2rem; font-weight: 700; margin-bottom: 0.3rem;
+        text-align: center; color: #1a3c5e;
     }
     .subtitle {
-        font-size: 1.0rem;
-        color: #666;
-        margin-bottom: 1.5rem;
+        font-size: 0.95rem; color: #888; margin-bottom: 2rem;
+        text-align: center;
+    }
+    .section-title {
+        font-size: 1.1rem; font-weight: 700; color: #2d6a9f;
+        text-align: center; margin: 2rem 0 1rem 0;
     }
 
     /* ── Pipeline 流程动画 ── */
     .pipeline-container {
         display: flex; align-items: center; justify-content: center;
-        gap: 0; padding: 1.5rem 0; flex-wrap: wrap;
+        gap: 0; padding: 1rem 0 1.5rem 0; flex-wrap: nowrap;
     }
     .pipeline-step {
         background: linear-gradient(135deg, #1a3c5e 0%, #2d6a9f 100%);
-        color: white; border-radius: 12px; padding: 16px 20px;
-        text-align: center; min-width: 100px; font-weight: 600;
-        box-shadow: 0 4px 12px rgba(26,60,94,0.2);
-        animation: fadeInUp 0.6s ease-out both;
+        color: #fff; border-radius: 10px; padding: 14px 22px;
+        text-align: center; min-width: 90px; font-weight: 600;
+        font-size: 0.9rem; box-shadow: 0 3px 10px rgba(26,60,94,0.15);
+        animation: fadeInUp 0.5s ease-out both;
+        flex-shrink: 0;
     }
-    .pipeline-step:nth-child(1)  { animation-delay: 0.05s; }
-    .pipeline-step:nth-child(3)  { animation-delay: 0.15s; }
-    .pipeline-step:nth-child(5)  { animation-delay: 0.25s; }
-    .pipeline-step:nth-child(7)  { animation-delay: 0.35s; }
-    .pipeline-step:nth-child(9)  { animation-delay: 0.45s; }
-    .pipeline-step:nth-child(11) { animation-delay: 0.55s; }
+    .pipeline-step:nth-child(1)  { animation-delay: 0.00s; }
+    .pipeline-step:nth-child(3)  { animation-delay: 0.10s; }
+    .pipeline-step:nth-child(5)  { animation-delay: 0.20s; }
+    .pipeline-step:nth-child(7)  { animation-delay: 0.30s; }
+    .pipeline-step:nth-child(9)  { animation-delay: 0.40s; }
     .pipeline-arrow {
-        font-size: 1.5rem; color: #2d6a9f; margin: 0 4px;
-        animation: arrowPulse 1.5s infinite;
+        font-size: 1.2rem; color: #bbb; margin: 0 6px;
+        flex-shrink: 0; user-select: none;
+        animation: arrowPulse 2s infinite;
     }
     @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
+        from { opacity: 0; transform: translateY(16px); }
         to   { opacity: 1; transform: translateY(0); }
     }
     @keyframes arrowPulse {
-        0%, 100% { opacity: 0.3; transform: scale(1); }
-        50%      { opacity: 1.0; transform: scale(1.2); }
+        0%, 100% { opacity: 0.25; }
+        50%      { opacity: 0.70; }
     }
 
     /* ── Agent 卡片 ── */
     .agent-grid {
-        display: grid; grid-template-columns: repeat(4, 1fr);
-        gap: 12px; margin: 1.5rem 0;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px; margin: 1rem 0 1.5rem 0;
     }
-    @media (max-width: 900px) { .agent-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 960px)  { .agent-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 520px)  { .agent-grid { grid-template-columns: 1fr; } }
     .agent-feature-card {
-        border: 1px solid #e0e0e0; border-radius: 12px;
-        padding: 20px 16px; text-align: center;
+        border: 1px solid #e8eaed; border-radius: 12px;
+        padding: 24px 18px 20px 18px; text-align: center;
+        background: #fafbfc;
         transition: transform 0.2s, box-shadow 0.2s;
-        background: white;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: flex-start;
+        height: 100%; min-height: 200px;
     }
     .agent-feature-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(0,0,0,0.08);
     }
     .agent-feature-icon {
-        font-size: 2.2rem; margin-bottom: 8px;
+        font-size: 2rem; margin-bottom: 10px; line-height: 1;
     }
     .agent-feature-name {
-        font-weight: 700; font-size: 1.0rem; color: #1a3c5e;
-        margin-bottom: 6px;
+        font-weight: 700; font-size: 0.95rem; color: #1a3c5e;
+        margin-bottom: 8px; line-height: 1.3;
     }
     .agent-feature-desc {
-        font-size: 0.85rem; color: #555; line-height: 1.5;
+        font-size: 0.82rem; color: #666; line-height: 1.55;
+        flex-grow: 1;
     }
+
+    /* ── 技术栈标签 ── */
+    .tech-tag {
+        display: inline-block; background: #e8f0fe; color: #1a73e8;
+        border-radius: 4px; padding: 3px 10px; font-size: 0.8rem;
+        margin: 3px; font-weight: 500; line-height: 1.6;
+    }
+    .tech-tags-wrap {
+        text-align: center; margin-bottom: 2rem; line-height: 2;
+    }
+
+    /* ── 文件信息 ── */
+    .file-ready-box {
+        background: #f0f7f0; border: 1px solid #c8e6c9;
+        border-radius: 8px; padding: 12px 16px; margin: 0.5rem 0;
+        font-size: 0.9rem;
+    }
+
+    /* ── 免责声明 ── */
+    .disclaimer  { color: #aaa; font-size: 0.75rem; margin-top: 2rem; text-align: center; }
 
     /* ── 状态指示器 ── */
     .agent-running { border-left: 4px solid #1a73e8; animation: pulse 1.5s infinite; }
@@ -399,20 +429,6 @@ st.markdown("""
         0%   { opacity: 1.0; }
         50%  { opacity: 0.6; }
         100% { opacity: 1.0; }
-    }
-
-    /* ── 风险等级 ── */
-    .risk-high   { color: #d93025; font-weight: bold; }
-    .risk-mid    { color: #e37400; font-weight: bold; }
-    .risk-low    { color: #0f9d58; font-weight: bold; }
-    .citation    { color: #5f6368; font-size: 0.85rem; }
-    .disclaimer  { color: #999; font-size: 0.75rem; margin-top: 2rem; }
-
-    /* ── 技术栈标签 ── */
-    .tech-tag {
-        display: inline-block; background: #e8f0fe; color: #1a73e8;
-        border-radius: 4px; padding: 2px 8px; font-size: 0.8rem;
-        margin: 2px; font-weight: 500;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -514,37 +530,31 @@ with st.sidebar:
     st.markdown(t("about_text"))
     if st.session_state.language == "zh":
         st.markdown("""
-        **四个专业 Agent:**
-        - 📊 数据提取 Agent
-        - ⚠️ 风险评估 Agent
-        - 📋 合规审查 Agent
-        - 🔍 深度质疑 Agent (Devil's Advocate)
-
-        **工作方式:**
-        上传金融文档 → 提问 → 4 个 Agent 并行分析 → 协调 Agent 综合报告
-
-        [GitHub](https://github.com/leokiy/finrisk-multiagent) · [Issues](https://github.com/leokiy/finrisk-multiagent/issues)
-        """)
+        <div style="font-size:0.85rem; line-height:1.7; color:#555">
+        <b>四个专业 Agent</b><br>
+        📊 数据提取 &nbsp; ⚠️ 风险评估 &nbsp; 📋 合规审查 &nbsp; 🔍 深度质疑<br><br>
+        <b>工作方式</b><br>
+        上传文档 → 提问 → Agent 并行分析 → 综合报告<br><br>
+        <a href="https://github.com/leokiy/finrisk-multiagent">GitHub</a> · <a href="https://github.com/leokiy/finrisk-multiagent/issues">Issues</a>
+        </div>
+        """, unsafe_allow_html=True)
     else:
         st.markdown("""
-        **Four Specialist Agents:**
-        - 📊 Data Extraction Agent
-        - ⚠️ Risk Assessment Agent
-        - 📋 Compliance Checker Agent
-        - 🔍 Devil's Advocate Agent
-
-        **How it works:**
-        Upload → Ask → 4 Agents analyze in parallel → Orchestrator synthesizes
-
-        [GitHub](https://github.com/leokiy/finrisk-multiagent) · [Issues](https://github.com/leokiy/finrisk-multiagent/issues)
-        """)
+        <div style="font-size:0.85rem; line-height:1.7; color:#555">
+        <b>Four Specialist Agents</b><br>
+        📊 Data Extraction &nbsp; ⚠️ Risk Assessment &nbsp; 📋 Compliance &nbsp; 🔍 Devil's Advocate<br><br>
+        <b>How it works</b><br>
+        Upload → Ask → Agents analyze → Report<br><br>
+        <a href="https://github.com/leokiy/finrisk-multiagent">GitHub</a> · <a href="https://github.com/leokiy/finrisk-multiagent/issues">Issues</a>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ============================================================================
 # 主页面
 # ============================================================================
 
-st.markdown(f'<h1 style="font-size:2.2rem;font-weight:700;margin-bottom:0.2rem">{t("title")}</h1>', unsafe_allow_html=True)
-st.markdown(f'<p style="font-size:1.0rem;color:#666;margin-bottom:1.5rem">{t("subtitle")}</p>', unsafe_allow_html=True)
+st.markdown(f'<div style="font-size:1.8rem;font-weight:700;color:#1a3c5e;margin-bottom:0.3rem">{t("title")}</div>', unsafe_allow_html=True)
+st.markdown(f'<p style="font-size:0.9rem;color:#888;margin-bottom:1.2rem">{t("subtitle")}</p>', unsafe_allow_html=True)
 
 # ============================================================================
 # 文件上传区域
@@ -832,13 +842,13 @@ else:
     st.divider()
 
     # ── 标题 ──
-    st.markdown(f'<h2 style="text-align:center;color:#1a3c5e;margin-bottom:0.3rem">{t("welcome_title")}</h2>',
+    st.markdown(f'<h2 class="section-title" style="font-size:1.6rem;color:#1a3c5e">{t("welcome_title")}</h2>',
                 unsafe_allow_html=True)
-    st.markdown(f'<p style="text-align:center;color:#666;font-size:1.05rem;margin-bottom:2rem">{t("welcome_subtitle")}</p>',
+    st.markdown(f'<p class="subtitle">{t("welcome_subtitle")}</p>',
                 unsafe_allow_html=True)
 
     # ── 分析流程动画 ──
-    st.markdown(f'<h4 style="text-align:center;color:#2d6a9f">{t("welcome_pipeline_title")}</h4>',
+    st.markdown(f'<div class="section-title">{t("welcome_pipeline_title")}</div>',
                 unsafe_allow_html=True)
     pipeline_steps = [
         t("welcome_pipeline_1"), t("welcome_pipeline_2"), t("welcome_pipeline_3"),
@@ -853,6 +863,9 @@ else:
     st.markdown(pipeline_html, unsafe_allow_html=True)
 
     # ── Agent 卡片 ──
+    agent_title = ("🤖 四个专业 Agent" if st.session_state.language == "zh" else "🤖 Four Specialist Agents")
+    st.markdown(f'<div class="section-title">{agent_title}</div>',
+                unsafe_allow_html=True)
     agent_cards = [
         ("📊", t("welcome_agent_data_name"), t("welcome_agent_data_desc")),
         ("⚠️", t("welcome_agent_risk_name"), t("welcome_agent_risk_desc")),
@@ -870,12 +883,12 @@ else:
     st.markdown(cards_html, unsafe_allow_html=True)
 
     # ── 技术栈 ──
-    st.markdown(f'<h4 style="text-align:center;color:#2d6a9f;margin-top:1.5rem">{t("welcome_tech_title")}</h4>',
+    st.markdown(f'<div class="section-title">{t("welcome_tech_title")}</div>',
                 unsafe_allow_html=True)
     tech_items = t("welcome_tech_items").split(" · ")
-    tags_html = '<div style="text-align:center;margin-bottom:1.5rem">'
+    tags_html = '<div class="tech-tags-wrap">'
     for item in tech_items:
-        tags_html += f'<span class="tech-tag">{item.strip()}</span> '
+        tags_html += f'<span class="tech-tag">{item.strip()}</span>'
     tags_html += '</div>'
     st.markdown(tags_html, unsafe_allow_html=True)
 
