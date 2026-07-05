@@ -817,16 +817,7 @@ if st.session_state.file_processed:
         followups = result.get("followup_questions", [])
         if followups and len(followups) >= 2:
             st.session_state.doc_questions = followups
-        elif st.session_state.vector_store and api_key:
-            # fallback: 基于文档重新生成
-            try:
-                st.session_state.doc_questions = _generate_doc_questions(
-                    st.session_state.vector_store, api_key,
-                    st.session_state.language,
-                    st.session_state.get("_uploaded_filename", "document"),
-                )
-            except Exception:
-                pass
+            st.session_state._last_followups = followups
 
         # 显示各 Agent 的详细输出（可折叠）
         with st.expander(t("detail_title"), expanded=False):
@@ -850,6 +841,11 @@ if st.session_state.file_processed:
                         st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
                     else:
                         st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
+
+    # ── 兜底刷新推荐问题 ──
+    last = st.session_state.get("last_analysis")
+    if last and last.get("followup_questions"):
+        st.session_state.doc_questions = last["followup_questions"]
 
 else:
     # 未上传文件时显示欢迎信息
