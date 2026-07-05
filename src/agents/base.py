@@ -104,10 +104,6 @@ class BaseAgent(ABC):
           4. 后处理 + 返回
         """
         try:
-            # 临时设置 enable_search
-            original_search = self.llm.config.enable_search
-            self.llm.config.enable_search = enable_search
-
             # 1. RAG 检索 + 表格匹配
             rag_results, tables = self._retrieve(user_query, vector_store, top_k, api_key)
 
@@ -116,11 +112,8 @@ class BaseAgent(ABC):
                                             context_from_other_agents,
                                             web_search_results)
 
-            # 3. 调用 LLM
-            raw_output = self.llm.chat(messages)
-
-            # 恢复原始设置
-            self.llm.config.enable_search = original_search
+            # 3. 调用 LLM（enable_search 通过 kwargs 传递，线程安全）
+            raw_output = self.llm.chat(messages, enable_search=enable_search)
 
             # 4. 后处理
             final = self._postprocess(raw_output)

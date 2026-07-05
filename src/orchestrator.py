@@ -72,28 +72,62 @@ class Orchestrator:
 
     def run(self, user_query: str, vector_store: VectorStore,
             api_key: str = "", on_synthesis_token=None,
-            web_search_enabled: bool = False) -> dict:
-        """完整执行多 Agent 协作工作流，返回结构化的最终报告。
-
-        改进版流程:
-          0. 为每个 Agent 生成针对其角色的专属转述问题
-          1. 第一轮：3 Agent 并行分析（各自用自己的转述问题）
-          2. 第二轮：深度质疑 Agent 挑战前三方结论
-          3. 第三轮：第一轮 Agent 回应质疑（简短二次分析）
-          4. 第四轮：协调 Agent 综合所有输出 + 质疑 + 回应 → 最终报告
-        """
+            web_search_enabled: bool = False,
+            doc_type: str = "") -> dict:
+        """完整执行多 Agent 协作工作流，自适应分析深度。"""
         self.reporter.clear()
         lang = self.language
 
-        # ── 第零轮：为每个 Agent 生成专属转述 ──
-        msg0 = ("正在理解你的问题，为各 Agent 制定分析策略..."
+        # ── 第零轮：理解问题 + 判断意图 ──
+        msg0 = ("正在理解你的问题，判断分析策略..."
                 if lang == "zh" else
-                "Understanding your question, tailoring analysis for each agent...")
+                "Understanding your question, determining analysis depth...")
         self.reporter.update("Orchestrator", "running", msg0)
 
-        queries = self._reformulate_per_agent(user_query)
+        queries, question_type = self._reformulate_per_agent(user_query)
 
-        # ── 第一轮：3 Agent 并行，各自用自己的转述问题 ──
+        # ── 根据问题类型自适应分析深度 ──
+        # factual: 只查数据，精简回答
+        # analytical: 数据+风险+质疑，不要合规审查
+        # comprehensive: 全流程
+        is_factual = question_type == "factual"
+
+        if is_factual:
+            # 精简模式：只跑数据提取，直接给答案
+            msg = ("问题为数据查询，直接提取数据..."
+                   if lang == "zh" else
+                   "Factual query, extracting data directly...")
+            self.reporter.update("Orchestrator", "running", msg)
+
+            data_query = queries.get("data_extractor", user_query)
+            data_result = self.data_extractor.run(
+                data_query, vector_store, api_key=api_key,
+                enable_search=web_search_enabled,
+            )
+            self._log_agent_result(data_result)
+
+            # 简单综合：直接给答案，附带来源
+            self.llm.config.enable_search = web_search_enabled
+            final_report = self._synthesize_factual(
+                user_query, data_result, doc_type, on_synthesis_token,
+            )
+
+            self.reporter.update("Orchestrator", "done",
+                                 "分析完成。" if lang == "zh" else "Analysis complete.")
+
+            return {
+                "query": user_query,
+                "question_type": "factual",
+                "data_extraction": self._safe_result(data_result),
+                "risk_assessment": "",
+                "compliance_check": "",
+                "devils_advocate": "",
+                "rebuttals": {},
+                "final_report": final_report,
+                "execution_log": self.reporter.logs,
+            }
+
+        # ── 第一轮：3 Agent 并行 ──
         msg = ("启动第一轮分析：数据提取、风险评估、合规审查并行执行..."
                if lang == "zh" else
                "Round 1: Agents analyzing with role-specific instructions...")
@@ -129,7 +163,7 @@ class Orchestrator:
         )
         self._log_agent_result(devil_result)
 
-        # ── 第三轮：第一轮 Agent 回应质疑 ──
+        # ── 第三轮：Agent 回应质疑 ──
         rebuttals = {}
         if devil_result.success and devil_result.content:
             msg_rebuttal = ("Agent 正在回应质疑..."
@@ -141,7 +175,7 @@ class Orchestrator:
                 devil_result, vector_store, api_key, web_search_enabled,
             )
 
-        # ── 第四轮：协调 Agent 综合所有输出（流式）──
+        # ── 第四轮：综合 ──
         msg4 = ("正在综合所有分析结果、质疑与回应，生成最终报告..."
                 if lang == "zh" else
                 "Synthesizing all analysis, challenges, and rebuttals into final report...")
@@ -158,6 +192,7 @@ class Orchestrator:
 
         return {
             "query": user_query,
+            "question_type": question_type,
             "refined_query":      queries.get("data_extractor", user_query),
             "data_extraction":    self._safe_result(data_result),
             "risk_assessment":    self._safe_result(risk_result),
@@ -172,9 +207,43 @@ class Orchestrator:
     # 内部 — 问题转述
     # ----------------------------------------------------------------
 
-    def _reformulate_per_agent(self, user_query: str) -> dict[str, str]:
-        """为每个 Agent 生成针对其角色的专属转述问题。"""
+    def _reformulate_per_agent(self, user_query: str) -> tuple[dict[str, str], str]:
+        """为每个 Agent 生成针对其角色的专属转述问题。
+
+        Returns:
+            (queries_dict, question_type)
+            question_type: "factual" | "analytical" | "comprehensive"
+        """
         lang = self.language
+
+        # 先判断问题类型
+        qt_prompt = (
+            f"判断以下用户问题属于哪种类型，只输出一个词（factual/analytical/comprehensive）：\n\n"
+            f"factual = 查询具体数据（如\"利润多少\"\"营收增长了多少\"\"资产负债率是多少\"）\n"
+            f"analytical = 分析特定方面（如\"偿债能力如何\"\"有没有合规风险\"\"为什么毛利率下降\"）\n"
+            f"comprehensive = 全面评估（如\"做个风险评估\"\"全面分析这家公司\"\"有没有问题\"）\n\n"
+            f"用户问题：{user_query}\n\n类型："
+            if lang == "zh" else
+            f"Classify this user question. Output one word:\n\n"
+            f"factual = asking for specific data (e.g., 'what is the profit', 'how much did revenue grow')\n"
+            f"analytical = analyzing a specific aspect (e.g., 'how is debt capacity', 'any compliance risks')\n"
+            f"comprehensive = full assessment (e.g., 'do a risk assessment', 'analyze this company')\n\n"
+            f"Question: {user_query}\n\nType:"
+        )
+        try:
+            qt_resp = self.llm.chat(
+                [{"role": "user", "content": qt_prompt}],
+                model="qwen-turbo", temperature=0.0, max_tokens=20,
+            )
+            qt = qt_resp.strip().lower()
+            if "factual" in qt:
+                question_type = "factual"
+            elif "analytical" in qt:
+                question_type = "analytical"
+            else:
+                question_type = "comprehensive"
+        except Exception:
+            question_type = "comprehensive"
 
         role_hints = {
             "data_extractor": (
@@ -255,7 +324,7 @@ devils_advocate: [directive]"""
         for key in role_hints:
             if key not in queries or not queries[key]:
                 queries[key] = user_query
-        return queries
+        return queries, question_type
 
     def _reformulate_query(self, user_query: str) -> str:
         """理解并转述用户问题：明确问什么、需要什么信息、好答案长什么样。"""
@@ -403,6 +472,42 @@ Output (clarification → information needs → analysis directive):"""
             {"role": "system", "content": self.synthesis_prompt},
             {"role": "user", "content": content},
         ]
+
+    # ── 精简模式：数据查询 ──
+
+    def _synthesize_factual(self, user_query, data_result, doc_type, on_token=None):
+        """数据查询模式：直接回答，不展开分析。"""
+        lang = self.language
+        doc_info = f"（文档类型：{doc_type}）" if doc_type else ""
+
+        content = f"""## 用户问题
+{user_query}
+
+## 文档信息
+{doc_info}
+
+## 📊 数据提取 Agent 输出
+{data_result.content if data_result.success else f'[执行失败: {data_result.error}]'}
+
+请直接回答用户的问题。规则：
+1. **第一句话必须是问题的直接答案**，包含具体数据和单位。不要先说"根据文档"——直接把数字说出来
+2. 每个数据标注来源页码
+3. 如果文档中没有该数据，明确说明"文档中未披露"
+4. 如果启用了联网搜索且文档中没有，可以引用联网搜索结果，并标注为"外部数据"
+5. 回答控制在10行以内，不要展开风险评估"""
+        messages = [
+            {"role": "system", "content": (
+                "你是一个精准的数据查询助手。你的唯一任务是直接回答用户的数据问题。"
+                "第一句话给答案，然后标注来源。不要分析、不要评估、不要展开。"
+                if lang == "zh" else
+                "You are a precise data query assistant. Answer data questions directly. "
+                "First sentence: the answer. Then: sources. No analysis, no expansion."
+            )},
+            {"role": "user", "content": content},
+        ]
+        if on_token:
+            return self.llm.chat_stream(messages, on_token=on_token)
+        return self.llm.chat(messages)
 
     # ── 回应质疑 ──
 

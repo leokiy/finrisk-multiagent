@@ -611,7 +611,30 @@ if uploaded_file and not st.session_state.file_processed:
             st.session_state.file_processed = True
             st.session_state.processing_file = False
             st.session_state.chat_history = []
-            st.session_state.doc_questions = None  # 触发文档扫描
+            st.session_state.doc_questions = None
+            st.session_state.doc_type = ""  # 触发文档类型识别
+
+            # 识别文档类型（取前3页文本块快速判断，失败不影响主流程）
+            try:
+                from src.llm.client import LLMConfig, LLMClient
+                front_chunks = vector_store.search(
+                    "年报 半年报 季度报告 招股说明书", top_k=5, api_key=api_key
+                )
+                front_text = " ".join(r.chunk.text[:200] for r in front_chunks)[:1500]
+                if front_text.strip():
+                    doc_cfg = LLMConfig(api_key=api_key, model="qwen-turbo",
+                                       temperature=0.1, max_tokens=50)
+                    doc_client = LLMClient(doc_cfg)
+                    lang_hint = st.session_state.get("language", "zh")
+                    if lang_hint == "zh":
+                        doc_prompt = f"判断文档类型（年报/半年报/季报/招股说明书/债券募集说明书/其他）。只输出类型名称：\n{front_text}"
+                    else:
+                        doc_prompt = f"Identify document type (Annual Report/Semi-annual/Quarterly/Prospectus/Bond/Other). Output type only:\n{front_text}"
+                    doc_resp = doc_client.chat([{"role": "user", "content": doc_prompt}])
+                    st.session_state.doc_type = doc_resp.strip()
+            except Exception as e:
+                st.session_state.doc_type = ""
+                print(f"[DocType] skipped: {e}")
 
             # 清理临时文件
             os.unlink(tmp_path)
@@ -737,6 +760,7 @@ if st.session_state.file_processed:
                 api_key=api_key,
                 on_synthesis_token=on_token,
                 web_search_enabled=web_search_enabled,
+                doc_type=st.session_state.get("doc_type", ""),
             )
 
             report = result.get("final_report", "")

@@ -82,9 +82,11 @@ class LLMClient:
         model = kwargs.get("model", self.config.model)
         temperature = kwargs.get("temperature", self.config.temperature)
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+        enable_search = kwargs.get("enable_search", self.config.enable_search)
 
         if self.config.is_dashscope:
-            for chunk in self._stream_dashscope(messages, model, temperature, max_tokens):
+            for chunk in self._stream_dashscope(messages, model, temperature,
+                                                max_tokens, enable_search):
                 yield chunk
         else:
             for chunk in self._stream_openai(messages, model, temperature, max_tokens):
@@ -98,21 +100,23 @@ class LLMClient:
         model = kwargs.get("model", self.config.model)
         temperature = kwargs.get("temperature", self.config.temperature)
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+        enable_search = kwargs.get("enable_search", self.config.enable_search)
 
         if self.config.is_dashscope:
-            return self._call_dashscope(messages, model, temperature, max_tokens)
+            return self._call_dashscope(messages, model, temperature, max_tokens,
+                                        enable_search)
         return self._call_openai(messages, model, temperature, max_tokens)
 
     # ---- DashScope ----
 
     def _call_dashscope(self, messages: list[dict], model: str, temperature: float,
-                        max_tokens: int) -> object:
+                        max_tokens: int, enable_search: bool = False) -> object:
         kwargs = dict(
             model=model, messages=messages,
             temperature=temperature, max_tokens=max_tokens,
             result_format="message", api_key=self.config.api_key,
         )
-        if self.config.enable_search:
+        if enable_search:
             kwargs["enable_search"] = True
         resp = dashscope.Generation.call(**kwargs)
         if resp.status_code != 200:
@@ -122,14 +126,14 @@ class LLMClient:
         return resp
 
     def _stream_dashscope(self, messages: list[dict], model: str, temperature: float,
-                          max_tokens: int):
+                          max_tokens: int, enable_search: bool = False):
         kwargs = dict(
             model=model, messages=messages,
             temperature=temperature, max_tokens=max_tokens,
             result_format="message", stream=True, incremental_output=True,
             api_key=self.config.api_key,
         )
-        if self.config.enable_search:
+        if enable_search:
             kwargs["enable_search"] = True
         resp = dashscope.Generation.call(**kwargs)
         for chunk in resp:
