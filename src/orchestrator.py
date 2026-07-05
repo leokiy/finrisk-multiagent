@@ -99,43 +99,57 @@ class Orchestrator:
         doc_brief = self._scan_document_brief(vector_store, api_key, doc_type)
         question_type = self._classify_question(user_query)
 
-        print(f"[DEBUG] question_type={question_type}", file=sys.stderr)
-        print(f"[DEBUG] doc_brief={doc_brief[:300]}", file=sys.stderr)
+        # 把关键信息写入执行日志（用户可在 Streamlit 执行日志 tab 看到）
+        brief_lines = [l.strip() for l in doc_brief.split("\n") if l.strip() and "：" in l]
+        brief_summary = " | ".join(l[:60] for l in brief_lines[:4])
+        self.reporter.update(
+            "Orchestrator", "done",
+            (f"文档简报: {brief_summary}" if lang == "zh" and brief_summary
+             else f"Doc brief: {brief_summary}" if brief_summary
+             else ("文档分析完成" if lang == "zh" else "Document analysis done"))
+        )
+        self.reporter.update(
+            "Orchestrator", "info",
+            f"question_type={question_type} | web_search={web_search_enabled}"
+        )
 
         # ═══════════════════════════════════════════════════════════════
         # 联网搜索：基于文档简报 + 用户原始问题 → 精准搜索词 → 并行搜索
         # ═══════════════════════════════════════════════════════════════
         if web_search_enabled:
-            self.reporter.update(
-                "Orchestrator", "running",
-                ("正在基于文档信息生成搜索查询..."
-                 if lang == "zh" else "Generating search queries from document context...")
-            )
             agent_search_queries = self._generate_agent_search_queries(
                 user_query, doc_brief, question_type
             )
-            print(f"[DEBUG] search_queries={json.dumps(agent_search_queries, ensure_ascii=False, indent=2)}", file=sys.stderr)
+            # 写搜索词到执行日志
+            sq_summary = {}
+            for k, v in agent_search_queries.items():
+                sq_summary[k] = v
+            self.reporter.update(
+                "Orchestrator", "running",
+                ("搜索词: " + json.dumps(sq_summary, ensure_ascii=False)[:300]
+                 if lang == "zh" else
+                 "Search queries: " + json.dumps(sq_summary, ensure_ascii=False)[:300])
+            )
 
             agent_web_results = self._execute_agent_searches(
                 agent_search_queries, api_key
             )
+            # 写搜索结果摘要到执行日志
             for key, results in agent_web_results.items():
-                print(f"[DEBUG] {key}: {len(results)} results", file=sys.stderr)
-                for r in results:
-                    print(f"[DEBUG]   - {r.title[:80]} | {r.snippet[:100]}...", file=sys.stderr)
-
-            searched_agents = [k for k, v in agent_web_results.items() if v]
-            if searched_agents:
+                n = len(results)
+                sample = ""
+                if results:
+                    r = results[0]
+                    sample = f" | sample: {r.title[:50]} | {r.snippet[:80]}"
                 self.reporter.update(
-                    "Orchestrator", "done",
-                    (f"联网搜索完成：{', '.join(searched_agents)}"
-                     if lang == "zh" else f"Web search done: {', '.join(searched_agents)}")
+                    "Orchestrator", "done" if n > 0 else "error",
+                    f"{key}: {n} results{sample}"
                 )
-            else:
+            searched_agents = [k for k, v in agent_web_results.items() if v]
+            if not searched_agents:
                 self.reporter.update(
                     "Orchestrator", "error",
-                    ("联网搜索未返回任何结果"
-                     if lang == "zh" else "Web search returned no results")
+                    ("联网搜索未返回任何结果" if lang == "zh" else "Web search returned no results")
                 )
         else:
             agent_web_results = {}
