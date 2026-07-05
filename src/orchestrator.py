@@ -167,27 +167,32 @@ class Orchestrator:
         is_factual = question_type == "factual"
 
         if is_factual:
+            # 数据查询模式：不跑完整 Agent（太慢太啰嗦），直接 RAG + 搜索 → 一句话回答
             self.reporter.update(
                 "Orchestrator", "running",
-                ("数据查询模式：提取文档数据+联网搜索..."
+                ("数据查询：直接检索文档+搜索结果..."
                  if lang == "zh" and web_search_enabled else
-                 "数据查询模式：提取文档数据..."
+                 "数据查询：直接检索文档..."
                  if lang == "zh" else
-                 "Factual mode: extracting document + web data..."
+                 "Factual: searching document + web..."
                  if web_search_enabled else
-                 "Factual mode: extracting document data...")
+                 "Factual: searching document...")
             )
 
             data_web_results = agent_web_results.get("data_extractor")
-            data_result = self.data_extractor.run(
-                user_query, vector_store, api_key=api_key,
-                doc_brief=doc_brief,
-                web_search_results=data_web_results,
-            )
-            self._log_agent_result(data_result)
+
+            # 快速 RAG 检索（不跑 Agent）
+            rag_text = ""
+            if not vector_store.is_empty:
+                rag_results = vector_store.search(user_query, top_k=5, api_key=api_key)
+                if rag_results:
+                    rag_text = "\n".join(
+                        f"[第{r.chunk.page}页] {r.chunk.text[:300]}"
+                        for r in rag_results[:4]
+                    )
 
             final_report = self._synthesize_factual(
-                user_query, data_result, doc_type, on_synthesis_token,
+                user_query, rag_text, doc_type, on_synthesis_token,
                 web_search_enabled=web_search_enabled,
                 web_results=data_web_results,
             )
@@ -198,7 +203,7 @@ class Orchestrator:
             return {
                 "query": user_query,
                 "question_type": "factual",
-                "data_extraction": self._safe_result(data_result),
+                "data_extraction": rag_text[:500],
                 "risk_assessment": "",
                 "compliance_check": "",
                 "devils_advocate": "",
@@ -678,21 +683,14 @@ devils_advocate_verify: <query>"""
 
     # ── 精简模式：数据查询 ──
 
-    def _synthesize_factual(self, user_query, data_result, doc_type, on_token=None,
+    def _synthesize_factual(self, user_query, rag_text, doc_type, on_token=None,
                             web_search_enabled: bool = False,
                             web_results: list | None = None):
-        """数据查询模式：结合文档数据和联网搜索结果，直接给出答案。
-
-        三层策略：
-        1. 有预搜索结果 → 注入结果，LLM 直接综合（不重复搜索）
-        2. 开启了搜索但无预搜索结果 → LLM 自行联网搜索
-        3. 未开启搜索 → 只用文档数据
-        """
+        """数据查询模式：RAG片段 + 搜索结果 → 一句话回答。极简。"""
         from datetime import datetime
 
         lang = self.language
-        doc_info = f"文档类型：{doc_type}" if doc_type else "未知"
-        agent_output = data_result.content if data_result.success else "提取失败"
+        doc_data = rag_text if rag_text else "（文档中未找到相关数据）"
         today = datetime.now().strftime("%Y年%m月%d日" if lang == "zh" else "%B %d, %Y")
 
         if web_search_enabled and web_results:
@@ -709,96 +707,42 @@ devils_advocate_verify: <query>"""
             web_text = "\n\n".join(web_text_parts) if web_text_parts else "（未获取到搜索结果）"
 
             if lang == "zh":
-                content = f"""今天是{today}。
+                content = f"""你是数据查询助手。今天是{today}。
 
-用户想知道：{user_query}
+问：{user_query}
 
-## 文档中提取到的信息
-{agent_output}
+文档：{doc_data}
 
-## 联网搜索结果（来自搜索引擎的真实网页内容）
-{web_text}
+网络搜索：{web_text}
 
-请从以上信息中提取答案。严格按以下规则：
-1. **第一句话直接给出具体数字和单位**，不要任何铺垫
-2. **从搜索结果中直接复制数字，区分清楚每个指标**——营收是营收、净利润是净利润、扣非净利润是扣非净利润，不要混
-3. 如果用户问"利润"/"净利润"但搜索结果同时有营收和净利，只答净利润，不要答营收
-4. 同时列出文档数据和网络数据，标注来源
-5. 如果搜索结果中的数字互不一致，列出所有版本
-6. 控制在10行以内"""
+规则：一句话回答。格式："XXX为【数字+单位】（网络来源）"。最多3行。不要表格。"""
             else:
-                content = f"""Today is {today}.
-
-Question: {user_query}
-
-## Data from Document
-{agent_output}
-
-## Web Search Results (real search engine content)
-{web_text}
-
-Extract the answer from the information above. Strict rules:
-1. **First sentence: specific numbers with units. No preamble.**
-2. **Copy numbers directly from search results** — do not modify, convert, or supplement from memory. If results say 19.496 billion, write 19.496 billion.
-3. List both document data and web data, cite sources
-4. If numbers differ across sources, list ALL versions with attribution
-5. Keep under 10 lines."""
+                content = f"""Data query. Today is {today}.
+Q: {user_query}
+Doc: {doc_data}
+Web: {web_text}
+One sentence answer with number + source. Max 3 lines. No tables."""
 
             messages = [{"role": "user", "content": content}]
-            # 使用更强模型做综合
             if on_token:
                 return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
             return self.llm.chat(messages, model="qwen-max")
 
         elif web_search_enabled:
-            # ── 搜索未返回结果（DDGS 失败），只用文档数据 ──
             if lang == "zh":
-                content = f"""今天是{today}。
-
-用户想知道：{user_query}
-
-上传文档：{doc_info}
-文档中提取到的信息：{agent_output}
-
-注意：联网搜索暂时不可用，请仅基于文档数据回答。
-规则：
-1. 第一句话直接给答案（具体数字+单位）
-2. 文档有就给数据+页码，文档没有就说未披露
-3. 控制在10行以内，不展开分析"""
+                content = f"""问：{user_query}\n文档：{doc_data}\n（联网搜索未返回结果）\n直接回答。最多3行。"""
             else:
-                content = f"""Today is {today}.
-
-Question: {user_query}
-
-Document: {doc_info}
-Data from document: {agent_output}
-
-Note: Web search is temporarily unavailable. Answer based on document data only.
-Rules:
-1. First sentence: direct answer with numbers. No preamble.
-2. If in document, cite page. If not, state not disclosed.
-3. Keep under 10 lines, no analysis."""
-
+                content = f"""Q: {user_query}\nDoc: {doc_data}\n(Search unavailable)\nAnswer in 3 lines max."""
             messages = [{"role": "user", "content": content}]
             if on_token:
                 return self.llm.chat_stream(messages, on_token=on_token)
             return self.llm.chat(messages)
 
         else:
-            # ── 无联网：只用文档数据 ──
             if lang == "zh":
-                content = f"""用户问题：{user_query}
-文档类型：{doc_info}
-文档数据：{agent_output}
-
-直接回答。文档有就给数据+页码，文档没有就说未披露。8行以内。"""
+                content = f"""问：{user_query}\n文档：{doc_data}\n直接回答。最多3行。没数据就说未找到。"""
             else:
-                content = f"""Question: {user_query}
-Document: {doc_info}
-Data: {agent_output}
-
-Answer directly. If in document, cite page. If not, state not disclosed. Under 8 lines."""
-
+                content = f"""Q: {user_query}\nDoc: {doc_data}\nAnswer in 3 lines max."""
             messages = [{"role": "user", "content": content}]
             if on_token:
                 return self.llm.chat_stream(messages, on_token=on_token)
