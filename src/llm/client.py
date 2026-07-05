@@ -39,6 +39,10 @@ class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
         self._openai_client: Optional[OpenAI] = None
+        # 设置全局 api_key（避免逐次传参导致的 encoding 问题）
+        if config.is_dashscope and config.api_key:
+            import dashscope
+            dashscope.api_key = config.api_key
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -114,7 +118,7 @@ class LLMClient:
         kwargs = dict(
             model=model, messages=messages,
             temperature=temperature, max_tokens=max_tokens,
-            result_format="message", api_key=self.config.api_key,
+            result_format="message",
         )
         if enable_search:
             kwargs["enable_search"] = True
@@ -131,7 +135,6 @@ class LLMClient:
             model=model, messages=messages,
             temperature=temperature, max_tokens=max_tokens,
             result_format="message", stream=True, incremental_output=True,
-            api_key=self.config.api_key,
         )
         if enable_search:
             kwargs["enable_search"] = True

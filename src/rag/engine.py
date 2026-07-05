@@ -180,13 +180,17 @@ class VectorStore:
                     api_key: str = ""):
         self._chunks = chunks
         self._tables = tables
-        vectors = self._embed_batch([c.text for c in chunks], api_key)
+        if api_key:
+            import dashscope
+            dashscope.api_key = api_key
+        vectors = self._embed_batch([c.text for c in chunks])
         self._index = faiss.IndexFlatIP(vectors.shape[1])
         self._index.add(vectors.astype(np.float32))
         self._front_chunks = [c for c in chunks if c.page <= 3]
 
-    def search(self, query: str, api_key: str = "", top_k: int = 20,
-               extra_queries: list[str] | None = None) -> list[RetrievalResult]:
+    def search(self, query: str, top_k: int = 20,
+               extra_queries: list[str] | None = None,
+               **kwargs) -> list[RetrievalResult]:
         """主检索: RAG向量检索 + 表格关键词匹配。"""
         if self.is_empty:
             return []
@@ -197,7 +201,7 @@ class VectorStore:
 
         all_results = []
         for q in queries:
-            vec = self._embed_batch([q], api_key)[0].reshape(1, -1).astype(np.float32)
+            vec = self._embed_batch([q])[0].reshape(1, -1).astype(np.float32)
             k = min(top_k, len(self._chunks))
             scores, indices = self._index.search(vec, k)
             for score, idx in zip(scores[0], indices[0]):
@@ -273,15 +277,14 @@ class VectorStore:
         return deduped
 
     @staticmethod
-    def _embed_batch(texts: list[str], api_key: str) -> np.ndarray:
+    def _embed_batch(texts: list[str]) -> np.ndarray:
         import dashscope
         all_vecs = []
-        for i in range(0, len(texts), 10):  # v3 限制每批 10 条
+        for i in range(0, len(texts), 10):
             batch = texts[i:i + 10]
             resp = dashscope.TextEmbedding.call(
                 model="text-embedding-v3",
                 input=batch,
-                api_key=api_key,
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Embedding API 错误: {resp.message}")

@@ -140,7 +140,7 @@ class BaseAgent(ABC):
                 extra_queries = rewrite_query_for_search(query, api_key, self.language)
             except Exception:
                 pass
-        rag_results = store.search(query, top_k=top_k, api_key=api_key,
+        rag_results = store.search(query, top_k=top_k,
                                    extra_queries=extra_queries)
         # 表格关键词匹配
         table_results = store.search_tables(query, top_k=8)
