@@ -362,33 +362,51 @@ class Orchestrator:
 
     @staticmethod
     def _classify_question(user_query: str) -> str:
-        """快速分类用户问题类型，不调用 LLM。
+        """快速分类用户问题类型。
 
-        用关键词规则做粗分类，避免不必要的 API 调用。
+        factual  = 查具体数据/事实（问"是什么"）
+        analytical = 分析/评估某方面（问"为什么/怎么样/有什么风险"）
+        comprehensive = 全面评估（问"做个全面分析"）
         """
         q = user_query.strip()
-        # 明显的数据查询
-        data_keywords = [
-            "多少", "是多少", "什么时候", "何时", "哪天",
-            "how much", "how many", "what is", "when",
-        ]
-        if any(kw in q.lower() for kw in data_keywords):
-            # 进一步判断是否只是简单查数据
-            if len(q) < 30 or q.endswith("？") or q.endswith("?"):
-                return "factual"
 
-        # 全面评估请求
-        comprehensive_keywords = [
-            "全面", "综合", "完整", "所有", "全部", "整体",
-            "风险评估", "分析报告", "做个分析",
-            "comprehensive", "full", "complete", "overall",
-            "risk assessment", "analyze everything",
+        # 数据查询关键词（问"是什么"）
+        factual_kw = [
+            "多少", "是多少", "什么时候", "何时", "哪天", "哪一年",
+            "多少亿", "多少万", "多少钱",
+            "列出", "列出所有", "有哪些",
+            "how much", "how many", "what is", "when", "list",
         ]
-        if any(kw in q.lower() for kw in comprehensive_keywords):
+        # 分析评估关键词（问"为什么/怎么样"）
+        analytical_kw = [
+            "为什么", "原因", "怎么样", "如何", "怎么",
+            "风险", "评估", "分析一下", "判断",
+            "偿债", "流动性", "盈利能", "增长能", "负债",
+            "why", "how", "risk", "assess", "analyze",
+            "debt", "liquidity", "profitability",
+        ]
+        # 全面评估关键词
+        comprehensive_kw = [
+            "全面", "综合", "完整", "所有", "全部", "整体",
+            "做一个评估", "做个报告", "全面分析",
+            "comprehensive", "full report", "complete assessment",
+        ]
+
+        # 先检查全面评估（优先级最高）
+        if any(kw in q for kw in comprehensive_kw):
             return "comprehensive"
 
-        # 默认：分析特定方面
-        return "analytical"
+        # 检查数据查询（纯事实问题）
+        is_factual = any(kw in q for kw in factual_kw)
+        is_analytical = any(kw in q for kw in analytical_kw)
+
+        if is_factual and not is_analytical:
+            return "factual"
+        if is_analytical:
+            return "analytical"
+
+        # 默认：短问题大概率是查数据
+        return "factual" if len(q) < 20 else "analytical"
 
     # ----------------------------------------------------------------
     # 内部 — 联网搜索查询生成
@@ -429,35 +447,27 @@ class Orchestrator:
             return {"data_extractor": [user_query, f"{user_query} 2026 最新 数据"]}
 
         if lang == "zh":
-            prompt = f"""你是金融信息检索专家。以下是用户问题、以及从用户上传的文档中提取的主体信息。请基于这些信息，为4个专业Agent各生成2条精准的联网搜索查询。
+            prompt = f"""你是金融信息检索专家。用户向一个金融分析系统提了问题。请基于用户问题和文档主体信息，为每个Agent生成搜索查询。
 
-## 用户原始问题
+**核心原则：搜索词必须围绕用户的问题，不要偏离去搜不相干的东西。**
+
+## 用户原始问题（这是搜索的唯一目标）
 {user_query}
 
-## 文档主体信息
+## 文档主体信息（仅用于提取公司名/代码等实体）
 {doc_brief}
 
-## 各Agent的搜索目标
-- 数据提取Agent：
-  信息查询：搜索该主体的最新财务数据、关键指标（使用文档简报中的公司名/代码）
-  验证查询：用另一来源核实同一数据
-
-- 风险评估Agent：
-  信息查询：搜索该主体及行业的风险动态、负面新闻、市场变化
-  验证查询：搜索相反观点，检验自己的风险判断是否偏颇
-
-- 合规审查Agent：
-  信息查询：搜索该主体及行业的监管政策变化、合规要求
-  验证查询：搜索该主体是否有实际违规记录、处罚公告
-
-- 深度质疑Agent：
-  信息查询：搜索该主体的争议事件、做空报告、被忽视的风险信号
-  验证查询：搜索公司对这些质疑的回应和澄清
+## 各Agent的搜索任务（紧扣用户问题）
+- 数据提取Agent：搜索用户问题所需的具体数据
+- 风险评估Agent：搜索与用户问题相关的风险信息
+- 合规审查Agent：搜索与用户问题相关的合规信息
+- 深度质疑Agent：搜索用户问题可能涉及的争议或盲点
 
 ## 要求
-- **必须使用文档简报中的公司全称/股票代码（如有）构造查询**
-- 每条查询10-30字，自然语言
-- 严格按格式输出：
+- **搜索词必须包含用户问题中的关键信息**（时间段、指标名称等）
+- 使用文档简报中的公司名/代码
+- 每条查询10-30字
+- 严格按格式：
 data_extractor_info: <查询>
 data_extractor_verify: <查询>
 risk_assessor_info: <查询>
