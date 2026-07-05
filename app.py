@@ -723,16 +723,14 @@ if st.session_state.file_processed:
         user_query = st.session_state.pop("pending_query")
 
     # ── 推荐提问（固定在聊天记录上方、输入框下方）──
-    if not user_query:  # 只在没有待处理问题时显示
-        st.markdown("**" + ("📋 推荐追问:" if st.session_state.language == "zh" else "📋 Follow-up Questions:") + "**")
-        # 用 session 计数器确保 key 唯一，避免问题数量变化时报错
-        qkey = st.session_state.get("_qkey", 0)
-        cols = st.columns(len(quick_questions))
-        for i, (col, q) in enumerate(zip(cols, quick_questions)):
-            with col:
-                if st.button(q, key=f"quick_{qkey}_{i}", use_container_width=True):
-                    st.session_state.pending_query = q
-                    st.session_state._qkey = qkey + 1
+    st.markdown("**" + ("📋 推荐追问:" if st.session_state.language == "zh" else "📋 Follow-up Questions:") + "**")
+    qkey = st.session_state.get("_qkey", 0)
+    cols = st.columns(len(quick_questions))
+    for i, (col, q) in enumerate(zip(cols, quick_questions)):
+        with col:
+            if st.button(q, key=f"quick_{qkey}_{i}", use_container_width=True):
+                st.session_state.pending_query = q
+                st.session_state._qkey = qkey + 1
 
     # ── 聊天记录 ──
     for msg in st.session_state.chat_history:
