@@ -3,10 +3,10 @@
 
 每个 Agent 使用专属搜索查询并行执行搜索，获取真实的标题、URL 和摘要。
 搜索结果注入 Agent 上下文，由 LLM 综合文档 + 网络信息后产出分析。
-
-不再依赖 DashScope 内置搜索（enable_search），那个是黑盒且经常不生效。
 """
 
+import sys
+import traceback
 from dataclasses import dataclass
 
 
@@ -65,5 +65,9 @@ def search_web(query: str, api_key: str = "", max_results: int = 3,
 
         return results[:max_results]
 
-    except Exception:
+    except Exception as e:
+        # 不要静默吞错误——至少打印到 stderr
+        _err = f"[search_web ERROR] query={query[:60]} | {type(e).__name__}: {e}"
+        print(_err, file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return []
