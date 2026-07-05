@@ -11,14 +11,8 @@
 
 import concurrent.futures
 import json
-import sys
 from dataclasses import dataclass, field
 from typing import Optional
-
-import sys as _sys
-_LOAD_MARKER = "=== ORCHESTRATOR V2.0 LOADED === (doc_brief + ddgs)"
-_sys.stderr.write(f"\n{_LOAD_MARKER}\n")
-_sys.stderr.flush()
 
 from src.llm.client import LLMClient, LLMConfig
 from src.rag.engine import VectorStore
@@ -92,8 +86,6 @@ class Orchestrator:
         """
         self.reporter.clear()
         lang = self.language
-        self.reporter.update("Orchestrator", "done",
-                             "=== NEW v2.0 (doc_brief + ddgs) ===")
 
         # ═══════════════════════════════════════════════════════════════
         # 第零轮：扫描文档 → 文档简报
