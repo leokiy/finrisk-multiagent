@@ -722,7 +722,12 @@ if st.session_state.file_processed:
     if "pending_query" in st.session_state:
         user_query = st.session_state.pop("pending_query")
 
-    # ── 推荐提问（固定在聊天记录上方、输入框下方）──
+    # ── 聊天记录（先渲染，在上面）──
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # ── 推荐提问（后渲染，在聊天记录下方、输入框上方）──
     st.markdown("**" + ("📋 推荐追问:" if st.session_state.language == "zh" else "📋 Follow-up Questions:") + "**")
     qkey = st.session_state.get("_qkey", 0)
     cols = st.columns(len(quick_questions))
@@ -731,11 +736,6 @@ if st.session_state.file_processed:
             if st.button(q, key=f"quick_{qkey}_{i}", use_container_width=True):
                 st.session_state.pending_query = q
                 st.session_state._qkey = qkey + 1
-
-    # ── 聊天记录 ──
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
 
     # 处理用户提问
     if user_query:
@@ -815,8 +815,18 @@ if st.session_state.file_processed:
 
         # 用 Orchestrator 生成的追问实时刷新推荐问题
         followups = result.get("followup_questions", [])
-        if followups:
+        if followups and len(followups) >= 2:
             st.session_state.doc_questions = followups
+        elif st.session_state.vector_store and api_key:
+            # fallback: 基于文档重新生成
+            try:
+                st.session_state.doc_questions = _generate_doc_questions(
+                    st.session_state.vector_store, api_key,
+                    st.session_state.language,
+                    st.session_state.get("_uploaded_filename", "document"),
+                )
+            except Exception:
+                pass
 
         # 显示各 Agent 的详细输出（可折叠）
         with st.expander(t("detail_title"), expanded=False):
