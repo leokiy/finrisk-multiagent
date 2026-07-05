@@ -173,8 +173,8 @@ finrisk-multiagent/
 | **LLM** | DashScope (Qwen) / OpenAI 兼容 | qwen-turbo/plus/max |
 | **RAG** | FAISS + DashScope Embedding | 本地向量存储，全量 PDF 表格提取 |
 | **联网搜索** | DashScope enable_search | LLM 原生搜索，比传统搜索引擎 snippet 更精准 |
-| **文档处理** | pdfplumber + LangChain | PDF 文本提取 + 递归语义分块 + 表格结构化 |
-| **Agent 框架** | 自研轻量框架 | 不依赖 LangChain Agent / AutoGen，完全可控 |
+| **文档处理** | pdfplumber + LangChain TextSplitter | PDF 文本提取 + 递归语义分块 + 表格结构化 |
+| **Agent 编排** | 自研轻量调度器 | 不依赖 LangChain Agent / CrewAI 等重型 Agent 框架 |
 | **并行调度** | concurrent.futures | 标准库，Agent 并行 + 搜索并行 |
 
 ---
