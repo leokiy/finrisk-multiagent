@@ -18,7 +18,7 @@ class WebResult:
     snippet: str
 
 
-def search_web(query: str, api_key: str = "", max_results: int = 3,
+def search_web(query: str, api_key: str = "", max_results: int = 5,
                language: str = "zh") -> list[WebResult]:
     """使用 DuckDuckGo 搜索引擎获取真实网络搜索结果。
 

@@ -447,7 +447,7 @@ class Orchestrator:
         lang = self.language
 
         if question_type == "factual":
-            # 从文档简报中提取公司名和股票代码，拼入搜索词
+            # 从文档简报中提取公司名和股票代码
             company_name = ""
             stock_code = ""
             for line in doc_brief.split("\n"):
@@ -461,12 +461,17 @@ class Orchestrator:
                     if val and val != "未知" and val != "无":
                         stock_code = val
             entity = stock_code or company_name
+
+            # 用自然语言构造查询——DDGS对自然语言查询返回的snippet更长更丰富
             if entity:
                 return {"data_extractor": [
-                    f"{entity} {user_query}",
-                    f"{entity} 2026 一季度 财报 数据 核实",
+                    f"{entity} {user_query} 具体数据 金额",
+                    f"{entity} 发布 2026年一季度 业绩 营收 净利润 数据",
                 ]}
-            return {"data_extractor": [user_query, f"{user_query} 2026 最新 数据"]}
+            return {"data_extractor": [
+                f"{user_query} 具体数据 金额",
+                f"2026年一季度 业绩 营收 净利润 数据",
+            ]}
 
         if lang == "zh":
             prompt = f"""你是金融信息检索专家。用户向一个金融分析系统提了问题。请基于用户问题和文档主体信息，为每个Agent生成搜索查询。
@@ -568,7 +573,7 @@ devils_advocate_verify: <query>"""
             results = []
             for q in queries[:2]:  # 每个 Agent 最多 2 个搜索
                 try:
-                    r = search_web(q, api_key=api_key, max_results=2,
+                    r = search_web(q, api_key=api_key, max_results=3,
                                    language=self.language)
                     if r:
                         results.extend(r)
@@ -728,7 +733,7 @@ devils_advocate_verify: <query>"""
         if web_search_enabled and web_results:
             # ── 有预搜索结果：直接注入，不重复搜索 ──
             web_text_parts = []
-            for i, wr in enumerate(web_results[:3], 1):
+            for i, wr in enumerate(web_results[:5], 1):
                 snippet = wr.snippet[:800] if wr.snippet else ""
                 title = wr.title[:120] if wr.title else ""
                 url = wr.url[:200] if wr.url else ""
