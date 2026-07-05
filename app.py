@@ -451,6 +451,8 @@ for key, default in [
 # 语言偏好（独立于分析状态，不随重置清除）
 if "language" not in st.session_state:
     st.session_state.language = "zh"
+if "_qkey" not in st.session_state:
+    st.session_state._qkey = 0
 
 # ============================================================================
 # 侧边栏 — 配置
@@ -698,7 +700,7 @@ if st.session_state.file_processed:
 
 if st.session_state.file_processed:
 
-    # ── 文档扫描：自动生成个性化推荐提问 ──
+    # ── 初始文档扫描：自动生成个性化推荐提问（仅首次）──
     if (st.session_state.get("doc_questions") is None
             and st.session_state.vector_store is not None
             and api_key):
@@ -710,22 +712,9 @@ if st.session_state.file_processed:
                     st.session_state.get("_uploaded_filename", "document"),
                 )
             except Exception:
-                st.session_state.doc_questions = t("quick_questions")  # fallback
+                st.session_state.doc_questions = t("quick_questions")
 
-    # 如果扫描失败或未完成，用默认提问
     quick_questions = st.session_state.get("doc_questions") or t("quick_questions")
-
-    st.divider()
-    st.markdown("### 💬 " + ("提出你的风险分析问题" if st.session_state.language == "zh" else "Ask Your Risk Analysis Question"))
-
-    # 快捷提问
-    st.markdown("**" + ("📋 针对本文档的推荐提问:" if st.session_state.language == "zh" else "📋 Recommended Questions for This Document:") + "**")
-
-    cols = st.columns(len(quick_questions))
-    for i, (col, q) in enumerate(zip(cols, quick_questions)):
-        with col:
-            if st.button(q, key=f"quick_{i}", use_container_width=True):
-                st.session_state.pending_query = q
 
     # 输入区
     user_query = st.chat_input(t("chat_placeholder"))
@@ -733,7 +722,19 @@ if st.session_state.file_processed:
     if "pending_query" in st.session_state:
         user_query = st.session_state.pop("pending_query")
 
-    # 显示历史对话
+    # ── 推荐提问（固定在聊天记录上方、输入框下方）──
+    if not user_query:  # 只在没有待处理问题时显示
+        st.markdown("**" + ("📋 推荐追问:" if st.session_state.language == "zh" else "📋 Follow-up Questions:") + "**")
+        # 用 session 计数器确保 key 唯一，避免问题数量变化时报错
+        qkey = st.session_state.get("_qkey", 0)
+        cols = st.columns(len(quick_questions))
+        for i, (col, q) in enumerate(zip(cols, quick_questions)):
+            with col:
+                if st.button(q, key=f"quick_{qkey}_{i}", use_container_width=True):
+                    st.session_state.pending_query = q
+                    st.session_state._qkey = qkey + 1
+
+    # ── 聊天记录 ──
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
