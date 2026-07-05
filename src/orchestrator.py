@@ -10,6 +10,8 @@
 """
 
 import concurrent.futures
+import json
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -97,9 +99,8 @@ class Orchestrator:
         doc_brief = self._scan_document_brief(vector_store, api_key, doc_type)
         question_type = self._classify_question(user_query)
 
-        import json
-        print(f"[DEBUG] question_type={question_type}")
-        print(f"[DEBUG] doc_brief={doc_brief[:300]}")
+        print(f"[DEBUG] question_type={question_type}", file=sys.stderr)
+        print(f"[DEBUG] doc_brief={doc_brief[:300]}", file=sys.stderr)
 
         # ═══════════════════════════════════════════════════════════════
         # 联网搜索：基于文档简报 + 用户原始问题 → 精准搜索词 → 并行搜索
@@ -113,15 +114,15 @@ class Orchestrator:
             agent_search_queries = self._generate_agent_search_queries(
                 user_query, doc_brief, question_type
             )
-            print(f"[DEBUG] search_queries={json.dumps(agent_search_queries, ensure_ascii=False, indent=2)}")
+            print(f"[DEBUG] search_queries={json.dumps(agent_search_queries, ensure_ascii=False, indent=2)}", file=sys.stderr)
 
             agent_web_results = self._execute_agent_searches(
                 agent_search_queries, api_key
             )
             for key, results in agent_web_results.items():
-                print(f"[DEBUG] {key}: {len(results)} results")
+                print(f"[DEBUG] {key}: {len(results)} results", file=sys.stderr)
                 for r in results:
-                    print(f"[DEBUG]   - {r.title[:80]} | {r.snippet[:100]}...")
+                    print(f"[DEBUG]   - {r.title[:80]} | {r.snippet[:100]}...", file=sys.stderr)
 
             searched_agents = [k for k, v in agent_web_results.items() if v]
             if searched_agents:
