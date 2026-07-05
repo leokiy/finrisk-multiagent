@@ -93,24 +93,34 @@ class BaseAgent(ABC):
 
     def run(self, user_query: str, vector_store: VectorStore,
             context_from_other_agents: dict[str, str] | None = None,
-            top_k: int = 20, api_key: str = "") -> AgentResult:
+            top_k: int = 20, api_key: str = "",
+            enable_search: bool = False,
+            web_search_results: list | None = None) -> AgentResult:
         """
         执行 Agent：
           1. RAG 检索相关文档
           2. 构建消息（system prompt + 检索上下文 + 用户问题）
-          3. 调用 LLM
+          3. 调用 LLM（如 enable_search=True，LLM 自动联网搜索）
           4. 后处理 + 返回
         """
         try:
+            # 临时设置 enable_search
+            original_search = self.llm.config.enable_search
+            self.llm.config.enable_search = enable_search
+
             # 1. RAG 检索 + 表格匹配
             rag_results, tables = self._retrieve(user_query, vector_store, top_k, api_key)
 
             # 2. 构建消息
             messages = self._build_messages(user_query, rag_results, tables,
-                                            context_from_other_agents)
+                                            context_from_other_agents,
+                                            web_search_results)
 
             # 3. 调用 LLM
             raw_output = self.llm.chat(messages)
+
+            # 恢复原始设置
+            self.llm.config.enable_search = original_search
 
             # 4. 后处理
             final = self._postprocess(raw_output)
@@ -144,12 +154,32 @@ class BaseAgent(ABC):
         return rag_results, table_results
 
     def _build_messages(self, query: str, rag_results: list[RetrievalResult],
-                        tables: list, other_context: dict[str, str] | None) -> list[dict]:
+                        tables: list, other_context: dict[str, str] | None,
+                        web_results: list | None = None) -> list[dict]:
         parts = [self.system_prompt]
+
+        # 注入联网搜索结果（放在文档片段之前，要求Agent使用）
+        if web_results:
+            web_lines = [
+                "\n\n## 🔴 联网搜索结果（你必须使用这些外部信息来补充和验证你的分析）\n",
+                "以下是从互联网实时搜索到的最新行业数据、新闻报道和监管动态。",
+                "你必须在分析中引用这些信息，用于：\n",
+                "1. **行业对标**：将文档中的财务数据与行业平均水平进行对比\n",
+                "2. **时效性验证**：检查文档数据截止日后是否有重大事件发生\n",
+                "3. **外部风险识别**：搜索可能影响公司的最新政策、市场或监管变化\n",
+                "引用外部信息时标注来源URL。\n",
+            ]
+            for i, wr in enumerate(web_results, 1):
+                web_lines.append(
+                    f"### 搜索结果 {i}: {wr.title}\n"
+                    f"- 来源: {wr.url}\n"
+                    f"- 内容: {wr.snippet}\n"
+                )
+            parts.append("".join(web_lines))
 
         # 注入 RAG 检索到的文档片段
         if rag_results:
-            ctx_lines = ["\n\n## 检索到的文档片段（以下内容来自用户上传的文件）\n"]
+            ctx_lines = ["\n\n## 检索到的文档片段（来自用户上传的文件）\n"]
             for i, rr in enumerate(rag_results, 1):
                 ctx_lines.append(
                     f"### 片段 {i}  {rr.chunk.citation()}\n{rr.chunk.text}\n"

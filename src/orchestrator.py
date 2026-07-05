@@ -71,7 +71,8 @@ class Orchestrator:
     # ----------------------------------------------------------------
 
     def run(self, user_query: str, vector_store: VectorStore,
-            api_key: str = "", on_synthesis_token=None) -> dict:
+            api_key: str = "", on_synthesis_token=None,
+            web_search_enabled: bool = False) -> dict:
         """完整执行多 Agent 协作工作流，返回结构化的最终报告。"""
         self.reporter.clear()
         lang = self.language
@@ -84,15 +85,18 @@ class Orchestrator:
 
         refined_query = self._reformulate_query(user_query)
 
-        # ── 第一轮：并行执行三个独立 Agent ──
+        # ── 第一轮：并行执行三个独立 Agent（联网搜索由Agent自主触发）──
         msg = ("启动第一轮分析：数据提取、风险评估、合规审查并行执行..."
                if lang == "zh" else
                "Round 1: Data Extraction, Risk Assessment, Compliance Check in parallel...")
+        if web_search_enabled:
+            msg += ("（联网搜索已启用）" if lang == "zh" else " (web search enabled)")
         self.reporter.update("Orchestrator", "running", msg)
 
         round1_results = self._run_parallel(
             [self.data_extractor, self.risk_assessor, self.compliance],
             refined_query, vector_store, api_key,
+            enable_search=web_search_enabled,
         )
 
         data_result, risk_result, compliance_result = round1_results
@@ -113,15 +117,18 @@ class Orchestrator:
             refined_query, vector_store,
             context_from_other_agents=other_context,
             api_key=api_key,
+            enable_search=web_search_enabled,
         )
         self._log_agent_result(devil_result)
 
-        # ── 第三轮：协调 Agent 综合所有输出（流式） ──
+        # ── 第三轮：协调 Agent 综合所有输出（流式）──
         msg3 = ("正在综合所有分析结果，生成最终报告..."
                 if lang == "zh" else
                 "Synthesizing all findings into final report...")
         self.reporter.update("Orchestrator", "running", msg3)
 
+        # Synthesis 也启用联网搜索（用于行业对标和外部验证）
+        self.llm.config.enable_search = web_search_enabled
         final_report = self._synthesize_stream(
             user_query, refined_query, data_result, risk_result,
             compliance_result, devil_result, on_synthesis_token,
@@ -188,13 +195,14 @@ Output (clarification → information needs → analysis directive):"""
         )
 
     def _run_parallel(self, agents: list, query: str, store: VectorStore,
-                      api_key: str) -> list[AgentResult]:
+                      api_key: str, enable_search: bool = False) -> list[AgentResult]:
         """并行执行多个 Agent。"""
         results: list[AgentResult] = []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
-                executor.submit(agent.run, query, store, None, 20, api_key): agent
+                executor.submit(agent.run, query, store, None, 20, api_key,
+                               enable_search): agent
                 for agent in agents
             }
             for future in concurrent.futures.as_completed(futures):

@@ -71,12 +71,25 @@ I18N = {
         "download": "📥 下载完整报告 (Markdown)",
         "detail_title": "🔍 查看各 Agent 的详细分析过程",
         "detail_tabs": ["📊 数据提取", "⚠️ 风险评估", "📋 合规审查", "🔍 深度质疑", "📋 执行日志"],
-        "welcome_col1_title": "📊 数据提取 Agent",
-        "welcome_col1_text": "自动识别并结构化提取文档中的关键财务指标：\n- 资产负债、营收利润、现金流\n- 债务结构与偿债指标\n- 客户集中度与关联交易",
-        "welcome_col2_title": "⚠️ 风险评估 Agent",
-        "welcome_col2_text": "四维风险逐项评估：\n- 市场风险（行业/竞争/价格波动）\n- 信用风险（偿债/违约/担保）\n- 流动性风险（资金周转/现金流）\n- 操作与治理风险（内控/关联交易/诉讼）",
-        "welcome_col3_title": "🔍 深度质疑 Agent",
-        "welcome_col3_text": "魔鬼代言人机制——专门挑战其他 Agent 的结论：\n- 发现被忽视的盲点\n- 识别 Agent 之间的矛盾\n- 构建反向叙事，防止过度乐观",
+        "welcome_title": "🧠 多 Agent 协作分析引擎",
+        "welcome_subtitle": "不是一个 AI 在回答问题——而是一个由四个专业化 Agent 组成的分析团队在并行工作，最后交由协调 Agent 综合裁决。",
+        "welcome_agent_data_name": "数据提取 Agent",
+        "welcome_agent_data_desc": "从 PDF 中自动提取财务数据，支持全量表格识别和结构化输出，每项数据标注来源页码。",
+        "welcome_agent_risk_name": "风险评估 Agent",
+        "welcome_agent_risk_desc": "四维风险框架逐项打分：市场、信用、流动性、操作与治理。每项判断强制引用原文证据。",
+        "welcome_agent_comply_name": "合规审查 Agent",
+        "welcome_agent_comply_desc": "以监管者视角逐条对照法规框架，区分\"违规\"与\"需关注\"，标注具体条款依据。",
+        "welcome_agent_devil_name": "深度质疑 Agent",
+        "welcome_agent_devil_desc": "魔鬼代言人机制——专门挑战前三方结论，发现被忽视的盲点和逻辑矛盾。",
+        "welcome_pipeline_title": "⚡ 分析流程",
+        "welcome_pipeline_1": "📄 上传文档",
+        "welcome_pipeline_2": "📂 处理文档",
+        "welcome_pipeline_3": "🔍 理解问题",
+        "welcome_pipeline_4": "🤖 Agent 并行分析",
+        "welcome_pipeline_5": "⚖️ 质疑与裁决",
+        "welcome_pipeline_6": "📊 流式生成报告",
+        "welcome_tech_title": "🛠️ 技术架构",
+        "welcome_tech_items": "RAG 检索增强 · FAISS 向量索引 · 全量 PDF 表格提取 · LLM 查询改写 · DashScope Embedding · Qwen API · 流式输出 · 中英双语 · 联网搜索",
         "disclaimer": "⚠️ 免责声明：本系统由 AI 驱动，分析结果仅供参考，不构成投资建议或法律意见。使用前请确保已阅读并理解相关风险。",
         "agent_data": "📊 数据提取 Agent",
         "agent_risk": "⚠️ 风险评估 Agent",
@@ -137,12 +150,25 @@ I18N = {
         "download": "📥 Download Full Report (Markdown)",
         "detail_title": "🔍 View Detailed Agent Analysis",
         "detail_tabs": ["📊 Data Extraction", "⚠️ Risk Assessment", "📋 Compliance Check", "🔍 Devil's Advocate", "📋 Execution Log"],
-        "welcome_col1_title": "📊 Data Extraction Agent",
-        "welcome_col1_text": "Auto-identify and structurally extract key financial metrics:\n- Assets, liabilities, revenue, profit, cash flow\n- Debt structure and solvency indicators\n- Customer concentration and related-party transactions",
-        "welcome_col2_title": "⚠️ Risk Assessment Agent",
-        "welcome_col2_text": "Four-dimensional risk evaluation:\n- Market Risk (industry/competition/price volatility)\n- Credit Risk (debt/default/guarantees)\n- Liquidity Risk (working capital/cash flow)\n- Operational & Governance Risk (internal controls/RPT/litigation)",
-        "welcome_col3_title": "🔍 Devil's Advocate Agent",
-        "welcome_col3_text": "Devil's Advocate mechanism — challenges other agents:\n- Find overlooked blind spots\n- Identify contradictions between agents\n- Construct alternative narratives to prevent over-optimism",
+        "welcome_title": "🧠 Multi-Agent Analysis Engine",
+        "welcome_subtitle": "Not one AI answering your question — a team of four specialized agents working in parallel, with a coordinator adjudicating and synthesizing the final report.",
+        "welcome_agent_data_name": "Data Extraction Agent",
+        "welcome_agent_data_desc": "Extracts financial data from PDFs with full table recognition. Every number cited with source page.",
+        "welcome_agent_risk_name": "Risk Assessment Agent",
+        "welcome_agent_risk_desc": "Four-dimension risk scoring: Market, Credit, Liquidity, Operational & Governance. Evidence-grounded.",
+        "welcome_agent_comply_name": "Compliance Checker Agent",
+        "welcome_agent_comply_desc": "Reviews against regulatory frameworks from a regulator's perspective. Cites specific provisions.",
+        "welcome_agent_devil_name": "Devil's Advocate Agent",
+        "welcome_agent_devil_desc": "Systematically challenges other agents' conclusions. Finds blind spots and logical contradictions.",
+        "welcome_pipeline_title": "⚡ Analysis Pipeline",
+        "welcome_pipeline_1": "📄 Upload",
+        "welcome_pipeline_2": "📂 Process",
+        "welcome_pipeline_3": "🔍 Understand",
+        "welcome_pipeline_4": "🤖 Analyze",
+        "welcome_pipeline_5": "⚖️ Challenge",
+        "welcome_pipeline_6": "📊 Report",
+        "welcome_tech_title": "🛠️ Tech Stack",
+        "welcome_tech_items": "RAG · FAISS · Full Table Extraction · LLM Query Rewriting · DashScope Embedding · Qwen API · Streaming Output · Bilingual · Web Search",
         "disclaimer": "⚠️ Disclaimer: This system is AI-powered. Analysis results are for reference only and do NOT constitute investment advice or legal opinion.",
         "agent_data": "📊 Data Extraction Agent",
         "agent_risk": "⚠️ Risk Assessment Agent",
@@ -300,32 +326,88 @@ st.markdown("""
         color: #666;
         margin-bottom: 1.5rem;
     }
-    .agent-card {
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 12px;
-        margin: 6px 0;
+
+    /* ── Pipeline 流程动画 ── */
+    .pipeline-container {
+        display: flex; align-items: center; justify-content: center;
+        gap: 0; padding: 1.5rem 0; flex-wrap: wrap;
     }
-    .agent-running {
-        border-left: 4px solid #1a73e8;
-        animation: pulse 1.5s infinite;
+    .pipeline-step {
+        background: linear-gradient(135deg, #1a3c5e 0%, #2d6a9f 100%);
+        color: white; border-radius: 12px; padding: 16px 20px;
+        text-align: center; min-width: 100px; font-weight: 600;
+        box-shadow: 0 4px 12px rgba(26,60,94,0.2);
+        animation: fadeInUp 0.6s ease-out both;
     }
-    .agent-done {
-        border-left: 4px solid #0f9d58;
+    .pipeline-step:nth-child(1)  { animation-delay: 0.05s; }
+    .pipeline-step:nth-child(3)  { animation-delay: 0.15s; }
+    .pipeline-step:nth-child(5)  { animation-delay: 0.25s; }
+    .pipeline-step:nth-child(7)  { animation-delay: 0.35s; }
+    .pipeline-step:nth-child(9)  { animation-delay: 0.45s; }
+    .pipeline-step:nth-child(11) { animation-delay: 0.55s; }
+    .pipeline-arrow {
+        font-size: 1.5rem; color: #2d6a9f; margin: 0 4px;
+        animation: arrowPulse 1.5s infinite;
     }
-    .agent-error {
-        border-left: 4px solid #d93025;
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to   { opacity: 1; transform: translateY(0); }
     }
+    @keyframes arrowPulse {
+        0%, 100% { opacity: 0.3; transform: scale(1); }
+        50%      { opacity: 1.0; transform: scale(1.2); }
+    }
+
+    /* ── Agent 卡片 ── */
+    .agent-grid {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        gap: 12px; margin: 1.5rem 0;
+    }
+    @media (max-width: 900px) { .agent-grid { grid-template-columns: repeat(2, 1fr); } }
+    .agent-feature-card {
+        border: 1px solid #e0e0e0; border-radius: 12px;
+        padding: 20px 16px; text-align: center;
+        transition: transform 0.2s, box-shadow 0.2s;
+        background: white;
+    }
+    .agent-feature-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+    }
+    .agent-feature-icon {
+        font-size: 2.2rem; margin-bottom: 8px;
+    }
+    .agent-feature-name {
+        font-weight: 700; font-size: 1.0rem; color: #1a3c5e;
+        margin-bottom: 6px;
+    }
+    .agent-feature-desc {
+        font-size: 0.85rem; color: #555; line-height: 1.5;
+    }
+
+    /* ── 状态指示器 ── */
+    .agent-running { border-left: 4px solid #1a73e8; animation: pulse 1.5s infinite; }
+    .agent-done    { border-left: 4px solid #0f9d58; }
+    .agent-error   { border-left: 4px solid #d93025; }
     @keyframes pulse {
         0%   { opacity: 1.0; }
         50%  { opacity: 0.6; }
         100% { opacity: 1.0; }
     }
+
+    /* ── 风险等级 ── */
     .risk-high   { color: #d93025; font-weight: bold; }
     .risk-mid    { color: #e37400; font-weight: bold; }
     .risk-low    { color: #0f9d58; font-weight: bold; }
     .citation    { color: #5f6368; font-size: 0.85rem; }
     .disclaimer  { color: #999; font-size: 0.75rem; margin-top: 2rem; }
+
+    /* ── 技术栈标签 ── */
+    .tech-tag {
+        display: inline-block; background: #e8f0fe; color: #1a73e8;
+        border-radius: 4px; padding: 2px 8px; font-size: 0.8rem;
+        margin: 2px; font-weight: 500;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -400,6 +482,17 @@ with st.sidebar:
         )
         api_base = st.text_input(t("api_base"), value="https://api.openai.com/v1")
         model = st.text_input(t("model"), value="gpt-4o")
+
+    st.divider()
+
+    # -- 联网搜索 --
+    web_search_enabled = st.checkbox(
+        "🌐 联网搜索" if st.session_state.language == "zh" else "🌐 Web Search",
+        value=False,
+        help=("开启后将同步搜索最新行业数据、新闻和监管动态作为分析补充"
+              if st.session_state.language == "zh"
+              else "Enable to supplement analysis with latest industry data, news, and regulatory updates"),
+    )
 
     st.divider()
 
@@ -643,6 +736,7 @@ if st.session_state.file_processed:
                 st.session_state.vector_store,
                 api_key=api_key,
                 on_synthesis_token=on_token,
+                web_search_enabled=web_search_enabled,
             )
 
             report = result.get("final_report", "")
@@ -686,19 +780,54 @@ if st.session_state.file_processed:
 else:
     # 未上传文件时显示欢迎信息
     st.divider()
-    col_demo1, col_demo2, col_demo3 = st.columns(3)
 
-    with col_demo1:
-        st.markdown(f"### {t('welcome_col1_title')}")
-        st.markdown(t("welcome_col1_text"))
+    # ── 标题 ──
+    st.markdown(f'<h2 style="text-align:center;color:#1a3c5e;margin-bottom:0.3rem">{t("welcome_title")}</h2>',
+                unsafe_allow_html=True)
+    st.markdown(f'<p style="text-align:center;color:#666;font-size:1.05rem;margin-bottom:2rem">{t("welcome_subtitle")}</p>',
+                unsafe_allow_html=True)
 
-    with col_demo2:
-        st.markdown(f"### {t('welcome_col2_title')}")
-        st.markdown(t("welcome_col2_text"))
+    # ── 分析流程动画 ──
+    st.markdown(f'<h4 style="text-align:center;color:#2d6a9f">{t("welcome_pipeline_title")}</h4>',
+                unsafe_allow_html=True)
+    pipeline_steps = [
+        t("welcome_pipeline_1"), t("welcome_pipeline_2"), t("welcome_pipeline_3"),
+        t("welcome_pipeline_4"), t("welcome_pipeline_5"),
+    ]
+    pipeline_html = '<div class="pipeline-container">'
+    for i, step in enumerate(pipeline_steps):
+        pipeline_html += f'<div class="pipeline-step">{step}</div>'
+        if i < len(pipeline_steps) - 1:
+            pipeline_html += '<div class="pipeline-arrow">→</div>'
+    pipeline_html += '</div>'
+    st.markdown(pipeline_html, unsafe_allow_html=True)
 
-    with col_demo3:
-        st.markdown(f"### {t('welcome_col3_title')}")
-        st.markdown(t("welcome_col3_text"))
+    # ── Agent 卡片 ──
+    agent_cards = [
+        ("📊", t("welcome_agent_data_name"), t("welcome_agent_data_desc")),
+        ("⚠️", t("welcome_agent_risk_name"), t("welcome_agent_risk_desc")),
+        ("📋", t("welcome_agent_comply_name"), t("welcome_agent_comply_desc")),
+        ("🔍", t("welcome_agent_devil_name"), t("welcome_agent_devil_desc")),
+    ]
+    cards_html = '<div class="agent-grid">'
+    for icon, name, desc in agent_cards:
+        cards_html += f'''<div class="agent-feature-card">
+            <div class="agent-feature-icon">{icon}</div>
+            <div class="agent-feature-name">{name}</div>
+            <div class="agent-feature-desc">{desc}</div>
+        </div>'''
+    cards_html += '</div>'
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # ── 技术栈 ──
+    st.markdown(f'<h4 style="text-align:center;color:#2d6a9f;margin-top:1.5rem">{t("welcome_tech_title")}</h4>',
+                unsafe_allow_html=True)
+    tech_items = t("welcome_tech_items").split(" · ")
+    tags_html = '<div style="text-align:center;margin-bottom:1.5rem">'
+    for item in tech_items:
+        tags_html += f'<span class="tech-tag">{item.strip()}</span> '
+    tags_html += '</div>'
+    st.markdown(tags_html, unsafe_allow_html=True)
 
     st.divider()
     st.markdown(f'<p class="disclaimer">{t("disclaimer")}</p>', unsafe_allow_html=True)

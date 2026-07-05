@@ -21,6 +21,7 @@ class LLMConfig:
     model: str = "qwen-plus"
     temperature: float = 0.3
     max_tokens: int = 4096
+    enable_search: bool = False
 
     @property
     def is_dashscope(self) -> bool:
@@ -106,14 +107,14 @@ class LLMClient:
 
     def _call_dashscope(self, messages: list[dict], model: str, temperature: float,
                         max_tokens: int) -> object:
-        resp = dashscope.Generation.call(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            result_format="message",
-            api_key=self.config.api_key,
+        kwargs = dict(
+            model=model, messages=messages,
+            temperature=temperature, max_tokens=max_tokens,
+            result_format="message", api_key=self.config.api_key,
         )
+        if self.config.enable_search:
+            kwargs["enable_search"] = True
+        resp = dashscope.Generation.call(**kwargs)
         if resp.status_code != 200:
             raise RuntimeError(
                 f"DashScope API 错误 (code={resp.status_code}): {resp.message}"
@@ -122,16 +123,15 @@ class LLMClient:
 
     def _stream_dashscope(self, messages: list[dict], model: str, temperature: float,
                           max_tokens: int):
-        resp = dashscope.Generation.call(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            result_format="message",
-            stream=True,
-            incremental_output=True,
+        kwargs = dict(
+            model=model, messages=messages,
+            temperature=temperature, max_tokens=max_tokens,
+            result_format="message", stream=True, incremental_output=True,
             api_key=self.config.api_key,
         )
+        if self.config.enable_search:
+            kwargs["enable_search"] = True
+        resp = dashscope.Generation.call(**kwargs)
         for chunk in resp:
             if chunk.status_code == 200:
                 try:
