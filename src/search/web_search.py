@@ -1,10 +1,11 @@
 """
 联网搜索模块 — 基于 DashScope 内置搜索能力（enable_search=True）。
 
-使用用户已有的 DashScope API Key，无需额外申请搜索服务。
-搜索作为独立步骤在 Orchestrator 中执行，结果注入所有 Agent 上下文。
+每个 Agent 使用专属搜索查询并行执行搜索，结果注入 Agent 上下文。
+搜索作为独立步骤在 Orchestrator 中执行，与 Agent 分析解耦。
 """
 
+import re
 from dataclasses import dataclass
 
 
@@ -16,11 +17,20 @@ class WebResult:
     snippet: str
 
 
-def search_web(query: str, api_key: str = "", max_results: int = 3,
+def search_web(query: str, api_key: str = "", max_results: int = 2,
                language: str = "zh") -> list[WebResult]:
-    """使用 DashScope 内置搜索（enable_search=True）搜索最新信息。
+    """使用 DashScope 内置搜索（enable_search=True）获取最新信息。
 
-    同一 API Key，无需额外开通。搜索失败返回空列表，不影响主流程。
+    同一 API Key，无需额外开通搜索服务。
+    搜索失败返回空列表，不阻塞主流程。
+
+    Args:
+        query: 搜索查询（自然语言）
+        api_key: DashScope API Key
+        max_results: 保留参数，当前由 DashScope 内部控制
+        language: 查询语言
+    Returns:
+        WebResult 列表（通常 1 条，包含 LLM 搜索+综合后的结果）
     """
     if not api_key:
         return []
@@ -29,9 +39,9 @@ def search_web(query: str, api_key: str = "", max_results: int = 3,
         import dashscope
 
         search_prompt = (
-            f"请搜索以下内容，返回具体数据、来源和日期：{query}"
+            f"请搜索以下内容，返回具体数据、来源和日期。不要编造数据：{query}"
             if language == "zh"
-            else f"Search for the following and return specific data, sources and dates: {query}"
+            else f"Search for the following. Return specific data, sources and dates. Do not fabricate: {query}"
         )
 
         resp = dashscope.Generation.call(
@@ -45,23 +55,18 @@ def search_web(query: str, api_key: str = "", max_results: int = 3,
         )
 
         if resp.status_code == 200:
-            text = resp.output.choices[0].message.content
+            try:
+                text = resp.output.choices[0].message.content
+            except (AttributeError, IndexError):
+                return []
+
             if text and len(text.strip()) > 20:
-                # 尝试提取搜索引用信息
-                search_info = ""
-                if hasattr(resp, "output") and resp.output:
-                    try:
-                        search_info = str(
-                            resp.output.get("search_info", "")
-                            if isinstance(resp.output, dict)
-                            else ""
-                        )
-                    except Exception:
-                        pass
+                # 提取搜索来源信息
+                search_refs = _extract_search_info(resp)
 
                 return [WebResult(
-                    title=f"DashScope 搜索结果: {query[:60]}",
-                    url=search_info if search_info else "",
+                    title=f"搜索: {query[:80]}",
+                    url=search_refs if search_refs else "",
                     snippet=text.strip(),
                 )]
         return []
@@ -69,31 +74,27 @@ def search_web(query: str, api_key: str = "", max_results: int = 3,
         return []
 
 
-def build_search_queries(user_query: str, document_context: str = "",
-                         language: str = "zh") -> list[str]:
-    """根据用户问题生成 1-2 个精准搜索查询。
+def _extract_search_info(resp) -> str:
+    """从 DashScope 响应中提取搜索引用/URL 信息。"""
+    try:
+        output = resp.output
+        # 尝试多种方式提取 search_info
+        if hasattr(output, 'search_info') and output.search_info:
+            return str(output.search_info)
+        if isinstance(output, dict):
+            search_info = output.get('search_info', '')
+            if search_info:
+                return str(search_info)
+    except Exception:
+        pass
 
-    DashScope 搜索是 LLM 驱动的，查询越具体结果越精准。
-    不需要像传统搜索引擎那样拼接关键词——直接用自然语言更有效。
-    """
-    base = user_query.strip()
+    # Fallback：从响应文本中提取 URL
+    try:
+        text = resp.output.choices[0].message.content
+        urls = re.findall(r'https?://[^\s)\]）】】　]+', text)
+        if urls:
+            return '\n'.join(urls[:5])
+    except Exception:
+        pass
 
-    if language == "zh":
-        queries = [
-            f"{base}。请搜索并返回最新的具体数据、时间和来源。",
-        ]
-        # 如果问题涉及财务数据，追加一个行业/对比查询
-        if any(kw in base for kw in ["营收", "利润", "收入", "毛利率", "净利率",
-                                       "资产负债", "现金流", "增长", "下滑"]):
-            queries.append(
-                f"{base} 同行业对比 2025 最新"
-            )
-        return queries[:2]
-
-    queries = [
-        f"{base}. Please search and return the latest specific data, dates and sources.",
-    ]
-    if any(kw in base.lower() for kw in ["revenue", "profit", "margin", "growth",
-                                           "ratio", "cash flow"]):
-        queries.append(f"{base} industry comparison 2025 latest")
-    return queries[:2]
+    return ""

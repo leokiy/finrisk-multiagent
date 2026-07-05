@@ -86,6 +86,31 @@ class Orchestrator:
 
         queries, question_type = self._reformulate_per_agent(user_query)
 
+        # ── 联网搜索：为各 Agent 生成专属搜索查询并并行执行 ──
+        if web_search_enabled:
+            self.reporter.update(
+                "Orchestrator", "running",
+                ("正在为各 Agent 生成联网搜索查询..."
+                 if lang == "zh" else
+                 "Generating per-agent web search queries...")
+            )
+            agent_search_queries = self._generate_agent_search_queries(
+                user_query, queries, question_type, doc_type
+            )
+            agent_web_results = self._execute_agent_searches(
+                agent_search_queries, api_key
+            )
+            searched_agents = [k for k, v in agent_web_results.items() if v]
+            if searched_agents:
+                self.reporter.update(
+                    "Orchestrator", "done",
+                    (f"联网搜索完成：{', '.join(searched_agents)}"
+                     if lang == "zh" else
+                     f"Web search done: {', '.join(searched_agents)}")
+                )
+        else:
+            agent_web_results = {}
+
         # ── 根据问题类型自适应分析深度 ──
         # factual: 只查数据，精简回答
         # analytical: 数据+风险+质疑，不要合规审查
@@ -94,22 +119,30 @@ class Orchestrator:
 
         if is_factual:
             # 精简模式：只跑数据提取，直接给答案
-            msg = ("问题为数据查询，直接提取数据..."
+            msg = ("问题为数据查询，直接提取数据+联网搜索..."
+                   if lang == "zh" and web_search_enabled else
+                   "问题为数据查询，直接提取数据..."
                    if lang == "zh" else
+                   "Factual query, extracting data + web search..."
+                   if web_search_enabled else
                    "Factual query, extracting data directly...")
             self.reporter.update("Orchestrator", "running", msg)
 
             data_query = queries.get("data_extractor", user_query)
+            data_web_results = agent_web_results.get("data_extractor")
             data_result = self.data_extractor.run(
                 data_query, vector_store, api_key=api_key,
                 enable_search=web_search_enabled,
+                web_search_results=data_web_results,
             )
             self._log_agent_result(data_result)
 
-            # 简单综合：直接给答案，附带来源
+            # 综合：文档数据 + 网络搜索结果
             self.llm.config.enable_search = web_search_enabled
             final_report = self._synthesize_factual(
                 user_query, data_result, doc_type, on_synthesis_token,
+                web_search_enabled=web_search_enabled,
+                web_results=data_web_results,
             )
 
             self.reporter.update("Orchestrator", "done",
@@ -132,13 +165,16 @@ class Orchestrator:
                if lang == "zh" else
                "Round 1: Agents analyzing with role-specific instructions...")
         if web_search_enabled:
-            msg += ("（联网搜索已启用）" if lang == "zh" else " (web search enabled)")
+            msg += ("（各Agent使用专属联网搜索结果）"
+                    if lang == "zh" else
+                    " (each agent uses its own web search results)")
         self.reporter.update("Orchestrator", "running", msg)
 
         round1_results = self._run_parallel_with_queries(
             [self.data_extractor, self.risk_assessor, self.compliance],
             queries, vector_store, api_key,
             enable_search=web_search_enabled,
+            agent_web_results=agent_web_results,
         )
 
         data_result, risk_result, compliance_result = round1_results
@@ -160,6 +196,7 @@ class Orchestrator:
             context_from_other_agents=other_context,
             api_key=api_key,
             enable_search=web_search_enabled,
+            web_search_results=agent_web_results.get("devils_advocate"),
         )
         self._log_agent_result(devil_result)
 
@@ -326,6 +363,147 @@ devils_advocate: [directive]"""
                 queries[key] = user_query
         return queries, question_type
 
+    # ----------------------------------------------------------------
+    # 内部 — 联网搜索查询生成
+    # ----------------------------------------------------------------
+
+    def _generate_agent_search_queries(self, user_query: str,
+                                       per_agent_queries: dict[str, str],
+                                       question_type: str,
+                                       doc_type: str = "") -> dict[str, list[str]]:
+        """为每个 Agent 生成针对其角色特点的联网搜索查询。
+
+        每个 Agent 的搜索方向不同：
+        - 数据提取：搜具体财务数据、关键指标
+        - 风险评估：搜行业风险、市场动态、负面事件
+        - 合规审查：搜监管政策变化、处罚案例
+        - 深度质疑：搜争议事件、做空报告、被忽视的风险信号
+
+        Returns:
+            {agent_key: [search_query, ...]}
+        """
+        lang = self.language
+
+        # 数据查询模式：直接用用户问题搜索
+        if question_type == "factual":
+            return {"data_extractor": [user_query]}
+
+        data_query = per_agent_queries.get("data_extractor", user_query)[:200]
+
+        if lang == "zh":
+            prompt = f"""你是金融信息检索专家。4个专业Agent即将分析一份金融文档，请为每个Agent生成1个精准的联网搜索查询。
+
+## 用户问题
+{user_query}
+
+## 文档类型
+{doc_type or '未知'}
+
+## 各Agent的搜索方向
+- 数据提取Agent：搜索最新的具体财务数据、关键指标数值、季度/年度财报
+- 风险评估Agent：搜索行业风险动态、市场环境变化、公司及竞争对手的负面新闻、经营风险事件
+- 合规审查Agent：搜索最新的监管政策变化、合规要求更新、同行业处罚案例
+- 深度质疑Agent：搜索可能被忽略的风险信号、市场争议事件、做空或质疑性分析
+
+## 要求
+- 每个Agent只生成1个搜索查询（自然语言，10-30字）
+- 查询要包含问题中的关键实体（公司名/行业/指标）
+- 查询要具体、可直接用于搜索
+- 严格按以下格式输出（每行一个）：
+data_extractor_search: <查询>
+risk_assessor_search: <查询>
+compliance_checker_search: <查询>
+devils_advocate_search: <查询>"""
+        else:
+            prompt = f"""You are a financial information retrieval expert. Generate 1 precise web search query for each of 4 specialized agents about to analyze a financial document.
+
+## User Question
+{user_query}
+
+## Document Type
+{doc_type or 'Unknown'}
+
+## Search Directions per Agent
+- Data Extractor: search for latest specific financial data, key metrics, quarterly/annual reports
+- Risk Assessor: search for industry risks, market changes, negative news about the company/competitors, operational risk events
+- Compliance Checker: search for latest regulatory changes, compliance updates, industry enforcement actions
+- Devil's Advocate: search for overlooked risk signals, market controversies, short reports, skeptical analysis
+
+## Requirements
+- 1 search query per agent (natural language, 10-20 words)
+- Include key entities (company name/industry/metrics) from the question
+- Be specific and directly usable for web search
+- Output format (one per line):
+data_extractor_search: <query>
+risk_assessor_search: <query>
+compliance_checker_search: <query>
+devils_advocate_search: <query>"""
+
+        key_map = {
+            "data_extractor_search": "data_extractor",
+            "risk_assessor_search": "risk_assessor",
+            "compliance_checker_search": "compliance_checker",
+            "devils_advocate_search": "devils_advocate",
+        }
+
+        try:
+            resp = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                model="qwen-turbo", temperature=0.1, max_tokens=400,
+            )
+        except Exception:
+            # 降级：所有 Agent 共用用户原始问题
+            return {k: [user_query] for k in key_map.values()}
+
+        queries: dict[str, list[str]] = {}
+        for line in resp.strip().split("\n"):
+            line = line.strip()
+            for prefix, key in key_map.items():
+                if line.lower().startswith(prefix.lower()):
+                    q = line.split(":", 1)[-1].strip().strip('"').strip("'")
+                    if q and len(q) > 2:
+                        queries[key] = [q]
+
+        # 补全缺失的 Agent
+        for key in key_map.values():
+            if key not in queries or not queries[key]:
+                queries[key] = [user_query]
+
+        return queries
+
+    def _execute_agent_searches(self, agent_search_queries: dict[str, list[str]],
+                                api_key: str) -> dict[str, list]:
+        """并行执行所有 Agent 的联网搜索。单个搜索失败不影响其他。"""
+        from src.search.web_search import search_web
+
+        all_results: dict[str, list] = {}
+
+        def _search_for_agent(agent_key: str, queries: list[str]):
+            results = []
+            for q in queries[:2]:  # 每个 Agent 最多 2 个搜索
+                try:
+                    r = search_web(q, api_key=api_key, max_results=2,
+                                   language=self.language)
+                    if r:
+                        results.extend(r)
+                except Exception:
+                    pass  # 单个搜索失败不阻塞
+            return agent_key, results
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(_search_for_agent, key, queries): key
+                for key, queries in agent_search_queries.items()
+            }
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    key, results = future.result()
+                    all_results[key] = results
+                except Exception:
+                    pass
+
+        return all_results
+
     def _reformulate_query(self, user_query: str) -> str:
         """理解并转述用户问题：明确问什么、需要什么信息、好答案长什么样。"""
         lang = self.language
@@ -370,8 +548,10 @@ Output (clarification → information needs → analysis directive):"""
 
     def _run_parallel_with_queries(self, agents: list, queries: dict,
                                     store: VectorStore, api_key: str,
-                                    enable_search: bool = False) -> list[AgentResult]:
-        """并行执行多个 Agent，各自使用专属转述问题。"""
+                                    enable_search: bool = False,
+                                    agent_web_results: dict | None = None
+                                    ) -> list[AgentResult]:
+        """并行执行多个 Agent，各自使用专属转述问题 + 专属联网搜索结果。"""
         results: list[AgentResult] = []
         # agent → query 映射
         agent_key_map = {
@@ -383,12 +563,16 @@ Output (clarification → information needs → analysis directive):"""
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = {}
             for agent in agents:
-                agent_query = queries.get(agent_key_map.get(agent, ""), "")
+                agent_key = agent_key_map.get(agent, "")
+                agent_query = queries.get(agent_key, "")
                 if not agent_query:
                     agent_query = list(queries.values())[0] if queries else ""
+                web_results = (agent_web_results or {}).get(agent_key)
                 futures[
-                    executor.submit(agent.run, agent_query, store, None, 20,
-                                   api_key, enable_search)
+                    executor.submit(
+                        agent.run, agent_query, store, None, 20, api_key,
+                        enable_search, web_results
+                    )
                 ] = agent
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
@@ -403,16 +587,28 @@ Output (clarification → information needs → analysis directive):"""
         return ordered
 
     def _run_parallel(self, agents: list, query: str, store: VectorStore,
-                      api_key: str, enable_search: bool = False) -> list[AgentResult]:
+                      api_key: str, enable_search: bool = False,
+                      agent_web_results: dict | None = None) -> list[AgentResult]:
         """并行执行多个 Agent（使用相同 query，兼容旧调用）。"""
         results: list[AgentResult] = []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                executor.submit(agent.run, query, store, None, 20, api_key,
-                               enable_search): agent
-                for agent in agents
-            }
+            futures = {}
+            for agent in agents:
+                agent_key_map = {
+                    self.data_extractor: "data_extractor",
+                    self.risk_assessor: "risk_assessor",
+                    self.compliance: "compliance_checker",
+                }
+                web_results = (agent_web_results or {}).get(
+                    agent_key_map.get(agent, "")
+                )
+                futures[
+                    executor.submit(
+                        agent.run, query, store, None, 20, api_key,
+                        enable_search, web_results
+                    )
+                ] = agent
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
                 results.append(result)
@@ -475,54 +671,116 @@ Output (clarification → information needs → analysis directive):"""
 
     # ── 精简模式：数据查询 ──
 
-    def _synthesize_factual(self, user_query, data_result, doc_type, on_token=None):
-        """数据查询模式：文档有就用文档，文档没有就联网搜。"""
+    def _synthesize_factual(self, user_query, data_result, doc_type, on_token=None,
+                            web_search_enabled: bool = False,
+                            web_results: list | None = None):
+        """数据查询模式：结合文档数据和联网搜索结果，直接给出答案。
+
+        三层策略：
+        1. 有预搜索结果 → 注入结果，LLM 直接综合（不重复搜索）
+        2. 开启了搜索但无预搜索结果 → LLM 自行联网搜索
+        3. 未开启搜索 → 只用文档数据
+        """
         lang = self.language
         doc_info = f"文档类型：{doc_type}" if doc_type else "未知"
-        can_search = self.llm.config.enable_search
         agent_output = data_result.content if data_result.success else "提取失败"
 
-        search_rule_zh = (
-            "3. 如果文档中没有该数据，**必须联网搜索**，标注为[外部数据: 来源/时间]"
-            if can_search else
-            "3. 如果文档中没有该数据，说明未披露"
-        )
-        search_rule_en = (
-            "3. If data not in document, **search the web** and cite as [External: source/date]"
-            if can_search else
-            "3. If not in document, state Not disclosed"
-        )
+        if web_search_enabled and web_results:
+            # ── 有预搜索结果：直接注入，不重复搜索 ──
+            web_text_parts = []
+            for i, wr in enumerate(web_results[:3], 1):
+                snippet = wr.snippet[:600] if wr.snippet else ""
+                if snippet:
+                    web_text_parts.append(f"### 搜索结果{i}\n{snippet}")
+            web_text = "\n\n".join(web_text_parts) if web_text_parts else "（未获取到搜索结果）"
 
-        if lang == "zh":
-            content = f"""用户问题：{user_query}
+            if lang == "zh":
+                content = f"""用户想知道：{user_query}
 
-已上传文档类型：{doc_info}
-从文档中提取到的相关信息：
+## 文档中提取到的信息
 {agent_output}
 
-请直接回答用户的问题。规则：
+## 联网搜索结果
+{web_text}
+
+请综合文档数据和网络搜索结果，直接回答用户的问题。
+规则：
 1. 第一句话直接给答案（具体数字+单位），不要铺垫
-2. 优先使用文档中的数据，标注来源页码
-{search_rule_zh}
-4. 回答控制在8行以内，不展开分析"""
-        else:
-            content = f"""Question: {user_query}
+2. 同时列出文档数据和网络数据，标注来源（文档第X页 / 网络来源）
+3. 如果数据冲突，优先采信更近期的数据，并说明差异
+4. 回答控制在10行以内，不展开分析"""
+            else:
+                content = f"""Question: {user_query}
 
-Uploaded document: {doc_info}
-Data extracted from document:
+## Data from Document
 {agent_output}
 
-Answer directly. Rules:
-1. First sentence: the answer with numbers
-2. Use document data first, cite page numbers
-{search_rule_en}
-4. Keep under 8 lines, no analysis"""
+## Web Search Results
+{web_text}
 
-        messages = [{"role": "user", "content": content}]
-        if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token,
-                                       enable_search=can_search)
-        return self.llm.chat(messages, enable_search=can_search)
+Synthesize document data and web search results into a direct answer.
+Rules:
+1. First sentence: the answer with numbers. No preamble.
+2. List both document data and web data, cite sources (document page / web source)
+3. If data conflicts, prefer more recent data and explain the difference
+4. Keep under 10 lines, no analysis."""
+
+            messages = [{"role": "user", "content": content}]
+            # 已有搜索结果，不重复启用联网
+            if on_token:
+                return self.llm.chat_stream(messages, on_token=on_token)
+            return self.llm.chat(messages)
+
+        elif web_search_enabled:
+            # ── 无预搜索结果：LLM 自行联网搜索 ──
+            if lang == "zh":
+                content = f"""用户想知道：{user_query}
+
+上传文档：{doc_info}
+文档中提取到的信息：{agent_output}
+
+请联网搜索与用户问题相关的最新数据，结合文档信息直接回答。
+规则：
+1. 第一句话直接给答案（具体数字+单位）
+2. 标注每个数据的来源（文档第X页 或 网络来源/时间）
+3. 控制在10行以内，不展开分析"""
+            else:
+                content = f"""Question: {user_query}
+
+Document: {doc_info}
+Data from document: {agent_output}
+
+Search the web for the latest data related to this question, then combine with document data.
+Rules:
+1. First sentence: direct answer with numbers. No preamble.
+2. Cite source for each data point (document page / web source + date)
+3. Keep under 10 lines, no analysis."""
+
+            messages = [{"role": "user", "content": content}]
+            if on_token:
+                return self.llm.chat_stream(messages, on_token=on_token,
+                                           enable_search=True)
+            return self.llm.chat(messages, enable_search=True)
+
+        else:
+            # ── 无联网：只用文档数据 ──
+            if lang == "zh":
+                content = f"""用户问题：{user_query}
+文档类型：{doc_info}
+文档数据：{agent_output}
+
+直接回答。文档有就给数据+页码，文档没有就说未披露。8行以内。"""
+            else:
+                content = f"""Question: {user_query}
+Document: {doc_info}
+Data: {agent_output}
+
+Answer directly. If in document, cite page. If not, state not disclosed. Under 8 lines."""
+
+            messages = [{"role": "user", "content": content}]
+            if on_token:
+                return self.llm.chat_stream(messages, on_token=on_token)
+            return self.llm.chat(messages)
 
     # ── 回应质疑 ──
 
