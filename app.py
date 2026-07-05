@@ -774,8 +774,19 @@ if st.session_state.file_processed:
                 doc_type=st.session_state.get("doc_type", ""),
             )
 
-            report = result.get("final_report", "")
-            if not report:
+            # 诊断：直接在报告上方显示搜索状态
+            search_logs = [l for l in result.get("execution_log", [])
+                          if "搜索" in l.get("content", "") or "search" in l.get("content", "").lower()
+                          or "web_search" in l.get("content", "") or "results" in l.get("content", "")]
+            if search_logs:
+                diag = "\n\n".join(f"> {l['content'][:150]}" for l in search_logs)
+            elif web_search_enabled:
+                diag = "> ⚠️ 联网搜索已开启但未产生任何搜索日志"
+            else:
+                diag = "> 🔒 联网搜索未开启"
+
+            report = diag + "\n\n---\n\n" + result.get("final_report", "")
+            if not result.get("final_report"):
                 fail_msg = ("分析失败，请检查 API Key 和网络连接。"
                            if st.session_state.language == "zh"
                            else "Analysis failed. Please check your API Key and network connection.")
