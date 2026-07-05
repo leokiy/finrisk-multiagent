@@ -97,9 +97,20 @@ class Orchestrator:
             agent_search_queries = self._generate_agent_search_queries(
                 user_query, queries, question_type, doc_type
             )
+            # 调试：打印生成的搜索词
+            import json
+            print(f"[DEBUG] question_type={question_type}")
+            print(f"[DEBUG] search_queries={json.dumps(agent_search_queries, ensure_ascii=False, indent=2)}")
+
             agent_web_results = self._execute_agent_searches(
                 agent_search_queries, api_key
             )
+            # 调试：打印搜索结果摘要
+            for key, results in agent_web_results.items():
+                print(f"[DEBUG] {key}: {len(results)} results")
+                for r in results:
+                    print(f"[DEBUG]   - {r.title[:80]}")
+                    print(f"[DEBUG]     snippet={r.snippet[:150]}...")
             searched_agents = [k for k, v in agent_web_results.items() if v]
             if searched_agents:
                 self.reporter.update(
@@ -107,6 +118,13 @@ class Orchestrator:
                     (f"联网搜索完成：{', '.join(searched_agents)}"
                      if lang == "zh" else
                      f"Web search done: {', '.join(searched_agents)}")
+                )
+            else:
+                self.reporter.update(
+                    "Orchestrator", "error",
+                    ("联网搜索未返回任何结果"
+                     if lang == "zh" else
+                     "Web search returned no results")
                 )
         else:
             agent_web_results = {}
@@ -709,9 +727,13 @@ Output (clarification → information needs → analysis directive):"""
             # ── 有预搜索结果：直接注入，不重复搜索 ──
             web_text_parts = []
             for i, wr in enumerate(web_results[:3], 1):
-                snippet = wr.snippet[:600] if wr.snippet else ""
+                snippet = wr.snippet[:800] if wr.snippet else ""
+                title = wr.title[:120] if wr.title else ""
+                url = wr.url[:200] if wr.url else ""
                 if snippet:
-                    web_text_parts.append(f"### 搜索结果{i}\n{snippet}")
+                    web_text_parts.append(
+                        f"### 搜索结果{i}: {title}\n来源: {url}\n内容: {snippet}"
+                    )
             web_text = "\n\n".join(web_text_parts) if web_text_parts else "（未获取到搜索结果）"
 
             if lang == "zh":
@@ -722,15 +744,15 @@ Output (clarification → information needs → analysis directive):"""
 ## 文档中提取到的信息
 {agent_output}
 
-## 联网搜索结果
+## 联网搜索结果（来自搜索引擎的真实网页内容）
 {web_text}
 
-请综合文档数据和网络搜索结果，直接回答用户的问题。
-规则：
-1. 第一句话直接给答案（具体数字+单位），不要铺垫
-2. 同时列出文档数据和网络数据，标注来源（文档第X页 / 网络来源）
-3. 网络搜索结果来自实时搜索，优先采信——即使和你训练数据中的信息不一致也要以搜索结果为准
-4. 回答控制在10行以内，不展开分析"""
+请从以上信息中提取答案。严格按以下规则：
+1. **第一句话直接给出具体数字和单位**，不要任何铺垫
+2. **从搜索结果中直接复制数字**——不要修改、不要换算、不要凭记忆补充。搜索结果里有194.96亿就写194.96亿，不要改
+3. 同时列出文档数据和网络数据，标注来源
+4. 如果搜索结果中的数字互不一致，列出所有版本并标注哪个来源
+5. 控制在10行以内"""
             else:
                 content = f"""Today is {today}.
 
@@ -739,21 +761,21 @@ Question: {user_query}
 ## Data from Document
 {agent_output}
 
-## Web Search Results
+## Web Search Results (real search engine content)
 {web_text}
 
-Synthesize document data and web search results into a direct answer.
-Rules:
-1. First sentence: the answer with numbers. No preamble.
-2. List both document data and web data, cite sources (document page / web source)
-3. Web results are from real-time search — trust them even if they conflict with your training data
-4. Keep under 10 lines, no analysis."""
+Extract the answer from the information above. Strict rules:
+1. **First sentence: specific numbers with units. No preamble.**
+2. **Copy numbers directly from search results** — do not modify, convert, or supplement from memory. If results say 19.496 billion, write 19.496 billion.
+3. List both document data and web data, cite sources
+4. If numbers differ across sources, list ALL versions with attribution
+5. Keep under 10 lines."""
 
             messages = [{"role": "user", "content": content}]
-            # 已有搜索结果，不重复启用联网
+            # 使用更强模型做综合
             if on_token:
-                return self.llm.chat_stream(messages, on_token=on_token)
-            return self.llm.chat(messages)
+                return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
+            return self.llm.chat(messages, model="qwen-max")
 
         elif web_search_enabled:
             # ── 搜索未返回结果（DDGS 失败），只用文档数据 ──
