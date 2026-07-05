@@ -476,38 +476,53 @@ Output (clarification → information needs → analysis directive):"""
     # ── 精简模式：数据查询 ──
 
     def _synthesize_factual(self, user_query, data_result, doc_type, on_token=None):
-        """数据查询模式：直接回答，不展开分析。"""
+        """数据查询模式：文档有就用文档，文档没有就联网搜。"""
         lang = self.language
-        doc_info = f"（文档类型：{doc_type}）" if doc_type else ""
+        doc_info = f"文档类型：{doc_type}" if doc_type else "未知"
+        can_search = self.llm.config.enable_search
+        agent_output = data_result.content if data_result.success else "提取失败"
 
-        content = f"""## 用户问题
-{user_query}
+        search_rule_zh = (
+            "3. 如果文档中没有该数据，**必须联网搜索**，标注为[外部数据: 来源/时间]"
+            if can_search else
+            "3. 如果文档中没有该数据，说明未披露"
+        )
+        search_rule_en = (
+            "3. If data not in document, **search the web** and cite as [External: source/date]"
+            if can_search else
+            "3. If not in document, state Not disclosed"
+        )
 
-## 文档信息
-{doc_info}
+        if lang == "zh":
+            content = f"""用户问题：{user_query}
 
-## 📊 数据提取 Agent 输出
-{data_result.content if data_result.success else f'[执行失败: {data_result.error}]'}
+已上传文档类型：{doc_info}
+从文档中提取到的相关信息：
+{agent_output}
 
 请直接回答用户的问题。规则：
-1. **第一句话必须是问题的直接答案**，包含具体数据和单位。不要先说"根据文档"——直接把数字说出来
-2. 每个数据标注来源页码
-3. 如果文档中没有该数据，明确说明"文档中未披露"
-4. 如果启用了联网搜索且文档中没有，可以引用联网搜索结果，并标注为"外部数据"
-5. 回答控制在10行以内，不要展开风险评估"""
-        messages = [
-            {"role": "system", "content": (
-                "你是一个精准的数据查询助手。你的唯一任务是直接回答用户的数据问题。"
-                "第一句话给答案，然后标注来源。不要分析、不要评估、不要展开。"
-                if lang == "zh" else
-                "You are a precise data query assistant. Answer data questions directly. "
-                "First sentence: the answer. Then: sources. No analysis, no expansion."
-            )},
-            {"role": "user", "content": content},
-        ]
+1. 第一句话直接给答案（具体数字+单位），不要铺垫
+2. 优先使用文档中的数据，标注来源页码
+{search_rule_zh}
+4. 回答控制在8行以内，不展开分析"""
+        else:
+            content = f"""Question: {user_query}
+
+Uploaded document: {doc_info}
+Data extracted from document:
+{agent_output}
+
+Answer directly. Rules:
+1. First sentence: the answer with numbers
+2. Use document data first, cite page numbers
+{search_rule_en}
+4. Keep under 8 lines, no analysis"""
+
+        messages = [{"role": "user", "content": content}]
         if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token)
-        return self.llm.chat(messages)
+            return self.llm.chat_stream(messages, on_token=on_token,
+                                       enable_search=can_search)
+        return self.llm.chat(messages, enable_search=can_search)
 
     # ── 回应质疑 ──
 
