@@ -564,21 +564,49 @@ devils_advocate_verify: <query>"""
 
     def _execute_agent_searches(self, agent_search_queries: dict[str, list[str]],
                                 api_key: str) -> dict[str, list]:
-        """并行执行所有 Agent 的联网搜索。单个搜索失败不影响其他。"""
-        from src.search.web_search import search_web
+        """并行执行所有 Agent 的联网搜索——使用 DashScope enable_search。
+
+        每个 Agent 用自己的搜索查询调用 DashScope，LLM 自行搜索并返回结构化结果。
+        比 DDGS snippet 更准、更长、更可读。
+        """
+        from datetime import datetime
+        from src.llm.client import LLMClient, LLMConfig
+        from src.search.web_search import WebResult
 
         all_results: dict[str, list] = {}
+        today = datetime.now().strftime("%Y年%m月%d日" if self.language == "zh" else "%B %d, %Y")
 
         def _search_for_agent(agent_key: str, queries: list[str]):
             results = []
-            for q in queries[:2]:  # 每个 Agent 最多 2 个搜索
-                try:
-                    r = search_web(q, api_key=api_key, max_results=3,
-                                   language=self.language)
-                    if r:
-                        results.extend(r)
-                except Exception:
-                    pass  # 单个搜索失败不阻塞
+            # 合并该Agent的所有查询为一次搜索
+            combined = " | ".join(q for q in queries[:2] if q)
+            if not combined:
+                return agent_key, results
+
+            prompt = (
+                f"今天是{today}。请联网搜索以下内容，返回具体数据、来源和日期。"
+                f"不要编造数据，找不到就说找不到：\n{combined}"
+                if self.language == "zh" else
+                f"Today is {today}. Search the web for the following. "
+                f"Return specific data, sources and dates. Do not fabricate: {combined}"
+            )
+
+            try:
+                config = LLMConfig(api_key=api_key, model="qwen-plus",
+                                  temperature=0.1, max_tokens=1000)
+                client = LLMClient(config)
+                resp = client.chat(
+                    [{"role": "user", "content": prompt}],
+                    enable_search=True,
+                )
+                if resp and len(resp.strip()) > 10:
+                    results.append(WebResult(
+                        title=f"DashScope搜索: {combined[:60]}",
+                        url="",
+                        snippet=resp.strip(),
+                    ))
+            except Exception:
+                pass  # 单个搜索失败不阻塞
             return agent_key, results
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
