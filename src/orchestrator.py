@@ -73,38 +73,46 @@ class Orchestrator:
     def run(self, user_query: str, vector_store: VectorStore,
             api_key: str = "", on_synthesis_token=None,
             web_search_enabled: bool = False) -> dict:
-        """完整执行多 Agent 协作工作流，返回结构化的最终报告。"""
+        """完整执行多 Agent 协作工作流，返回结构化的最终报告。
+
+        改进版流程:
+          0. 为每个 Agent 生成针对其角色的专属转述问题
+          1. 第一轮：3 Agent 并行分析（各自用自己的转述问题）
+          2. 第二轮：深度质疑 Agent 挑战前三方结论
+          3. 第三轮：第一轮 Agent 回应质疑（简短二次分析）
+          4. 第四轮：协调 Agent 综合所有输出 + 质疑 + 回应 → 最终报告
+        """
         self.reporter.clear()
         lang = self.language
 
-        # ── 第零轮：理解并转述用户问题 ──
-        msg0 = ("正在理解你的问题，明确分析目标..."
+        # ── 第零轮：为每个 Agent 生成专属转述 ──
+        msg0 = ("正在理解你的问题，为各 Agent 制定分析策略..."
                 if lang == "zh" else
-                "Understanding your question and clarifying analysis goals...")
+                "Understanding your question, tailoring analysis for each agent...")
         self.reporter.update("Orchestrator", "running", msg0)
 
-        refined_query = self._reformulate_query(user_query)
+        queries = self._reformulate_per_agent(user_query)
 
-        # ── 第一轮：并行执行三个独立 Agent（联网搜索由Agent自主触发）──
+        # ── 第一轮：3 Agent 并行，各自用自己的转述问题 ──
         msg = ("启动第一轮分析：数据提取、风险评估、合规审查并行执行..."
                if lang == "zh" else
-               "Round 1: Data Extraction, Risk Assessment, Compliance Check in parallel...")
+               "Round 1: Agents analyzing with role-specific instructions...")
         if web_search_enabled:
             msg += ("（联网搜索已启用）" if lang == "zh" else " (web search enabled)")
         self.reporter.update("Orchestrator", "running", msg)
 
-        round1_results = self._run_parallel(
+        round1_results = self._run_parallel_with_queries(
             [self.data_extractor, self.risk_assessor, self.compliance],
-            refined_query, vector_store, api_key,
+            queries, vector_store, api_key,
             enable_search=web_search_enabled,
         )
 
         data_result, risk_result, compliance_result = round1_results
 
-        # ── 第二轮：深度质疑 Agent，看到前三个的输出 ──
+        # ── 第二轮：深度质疑 ──
         msg2 = ("正在审阅前三方分析结果，寻找盲点和矛盾..."
                 if lang == "zh" else
-                "Reviewing all three agents' outputs, searching for blind spots...")
+                "Devil's Advocate reviewing all outputs for blind spots...")
         self.reporter.update("Devil's Advocate", "running", msg2)
 
         other_context = {
@@ -114,24 +122,35 @@ class Orchestrator:
         }
 
         devil_result = self.devils_advocate.run(
-            refined_query, vector_store,
+            queries.get("devils_advocate", user_query), vector_store,
             context_from_other_agents=other_context,
             api_key=api_key,
             enable_search=web_search_enabled,
         )
         self._log_agent_result(devil_result)
 
-        # ── 第三轮：协调 Agent 综合所有输出（流式）──
-        msg3 = ("正在综合所有分析结果，生成最终报告..."
-                if lang == "zh" else
-                "Synthesizing all findings into final report...")
-        self.reporter.update("Orchestrator", "running", msg3)
+        # ── 第三轮：第一轮 Agent 回应质疑 ──
+        rebuttals = {}
+        if devil_result.success and devil_result.content:
+            msg_rebuttal = ("Agent 正在回应质疑..."
+                           if lang == "zh" else
+                           "Agents responding to challenges...")
+            self.reporter.update("Orchestrator", "running", msg_rebuttal)
+            rebuttals = self._collect_rebuttals(
+                data_result, risk_result, compliance_result,
+                devil_result, vector_store, api_key, web_search_enabled,
+            )
 
-        # Synthesis 也启用联网搜索（用于行业对标和外部验证）
+        # ── 第四轮：协调 Agent 综合所有输出（流式）──
+        msg4 = ("正在综合所有分析结果、质疑与回应，生成最终报告..."
+                if lang == "zh" else
+                "Synthesizing all analysis, challenges, and rebuttals into final report...")
+        self.reporter.update("Orchestrator", "running", msg4)
+
         self.llm.config.enable_search = web_search_enabled
-        final_report = self._synthesize_stream(
-            user_query, refined_query, data_result, risk_result,
-            compliance_result, devil_result, on_synthesis_token,
+        final_report = self._synthesize_with_rebuttals(
+            user_query, data_result, risk_result, compliance_result,
+            devil_result, rebuttals, on_synthesis_token,
         )
 
         self.reporter.update("Orchestrator", "done",
@@ -139,18 +158,104 @@ class Orchestrator:
 
         return {
             "query": user_query,
-            "refined_query":      refined_query,
+            "refined_query":      queries.get("data_extractor", user_query),
             "data_extraction":    self._safe_result(data_result),
             "risk_assessment":    self._safe_result(risk_result),
             "compliance_check":   self._safe_result(compliance_result),
             "devils_advocate":    self._safe_result(devil_result),
+            "rebuttals":          {k: v.content for k, v in rebuttals.items()},
             "final_report":       final_report,
             "execution_log":      self.reporter.logs,
         }
 
     # ----------------------------------------------------------------
-    # 内部
+    # 内部 — 问题转述
     # ----------------------------------------------------------------
+
+    def _reformulate_per_agent(self, user_query: str) -> dict[str, str]:
+        """为每个 Agent 生成针对其角色的专属转述问题。"""
+        lang = self.language
+
+        role_hints = {
+            "data_extractor": (
+                "这个Agent的职责是从文档中提取结构化财务数据。"
+                "转述时要强调：需要哪些具体数据、从哪些章节找、数据格式要求。"
+                if lang == "zh" else
+                "This agent extracts structured financial data. Emphasize: what data, which sections, format."
+            ),
+            "risk_assessor": (
+                "这个Agent的职责是从四个维度评估风险。"
+                "转述时要强调：关注哪些风险信号、每个维度需要什么证据、风险传导机制。"
+                if lang == "zh" else
+                "This agent assesses risk across four dimensions. Emphasize: risk signals, evidence needed, transmission mechanisms."
+            ),
+            "compliance_checker": (
+                "这个Agent的职责是对照监管框架审查合规问题。"
+                "转述时要强调：适用的法规框架、需要逐条检查的披露项、区分'违规'和'需关注'。"
+                if lang == "zh" else
+                "This agent checks regulatory compliance. Emphasize: applicable frameworks, disclosure items to check, violation vs concern."
+            ),
+            "devils_advocate": (
+                "这个Agent的职责是挑战其他Agent的结论，寻找盲点。"
+                "转述时要强调：质疑的角度（数据/假设/逻辑/遗漏/时间）、要求找出矛盾。"
+                if lang == "zh" else
+                "This agent challenges other agents' conclusions. Emphasize: angles of challenge, find contradictions."
+            ),
+        }
+
+        if lang == "zh":
+            prompt = f"""你是一个分析策略制定专家。用户向一个金融文档分析系统提出了问题。系统有4个专业Agent，每个Agent的能力不同。请你为每个Agent制定专属的分析指引。
+
+## 用户问题
+{user_query}
+
+## 各Agent角色说明及转述要求
+
+"""
+            for key, hint in role_hints.items():
+                prompt += f"### {key}\n{hint}\n\n"
+
+            prompt += """请输出每个Agent的专属分析指引，格式：
+data_extractor: [转述后的分析任务]
+risk_assessor: [转述后的分析任务]
+compliance_checker: [转述后的分析任务]
+devils_advocate: [转述后的分析任务]
+
+注意：每个指引要具体、与该Agent的能力匹配、明确告知Agent应该做什么和怎么做。"""
+        else:
+            prompt = f"""You are an analysis strategy expert. A user asked a question to a financial document analysis system with 4 specialized agents. Create tailored analysis directives for each agent.
+
+## User Question
+{user_query}
+
+## Agent Roles
+"""
+            for key, hint in role_hints.items():
+                prompt += f"### {key}\n{hint}\n\n"
+
+            prompt += """Output one directive per agent:
+data_extractor: [directive]
+risk_assessor: [directive]
+compliance_checker: [directive]
+devils_advocate: [directive]"""
+
+        resp = self.llm.chat(
+            [{"role": "user", "content": prompt}],
+            model="qwen-turbo", temperature=0.2, max_tokens=800,
+        )
+
+        # 解析输出
+        queries = {}
+        for line in resp.strip().split("\n"):
+            line = line.strip()
+            for key in role_hints:
+                if line.startswith(f"{key}:") or line.startswith(f"{key}："):
+                    queries[key] = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+        # fallback
+        for key in role_hints:
+            if key not in queries or not queries[key]:
+                queries[key] = user_query
+        return queries
 
     def _reformulate_query(self, user_query: str) -> str:
         """理解并转述用户问题：明确问什么、需要什么信息、好答案长什么样。"""
@@ -194,9 +299,43 @@ Output (clarification → information needs → analysis directive):"""
             model="qwen-turbo", temperature=0.1, max_tokens=600,
         )
 
+    def _run_parallel_with_queries(self, agents: list, queries: dict,
+                                    store: VectorStore, api_key: str,
+                                    enable_search: bool = False) -> list[AgentResult]:
+        """并行执行多个 Agent，各自使用专属转述问题。"""
+        results: list[AgentResult] = []
+        # agent → query 映射
+        agent_key_map = {
+            self.data_extractor: "data_extractor",
+            self.risk_assessor: "risk_assessor",
+            self.compliance: "compliance_checker",
+        }
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {}
+            for agent in agents:
+                agent_query = queries.get(agent_key_map.get(agent, ""), "")
+                if not agent_query:
+                    agent_query = list(queries.values())[0] if queries else ""
+                futures[
+                    executor.submit(agent.run, agent_query, store, None, 20,
+                                   api_key, enable_search)
+                ] = agent
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                results.append(result)
+                self._log_agent_result(result)
+
+        ordered = []
+        agent_map = {r.agent_name: r for r in results}
+        for agent in agents:
+            ordered.append(agent_map.get(agent.name,
+                           AgentResult(agent.name, success=False, error="未返回结果")))
+        return ordered
+
     def _run_parallel(self, agents: list, query: str, store: VectorStore,
                       api_key: str, enable_search: bool = False) -> list[AgentResult]:
-        """并行执行多个 Agent。"""
+        """并行执行多个 Agent（使用相同 query，兼容旧调用）。"""
         results: list[AgentResult] = []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -264,6 +403,91 @@ Output (clarification → information needs → analysis directive):"""
             {"role": "system", "content": self.synthesis_prompt},
             {"role": "user", "content": content},
         ]
+
+    # ── 回应质疑 ──
+
+    def _collect_rebuttals(self, data_result, risk_result, compliance_result,
+                           devil_result, vector_store, api_key, enable_search):
+        """让第一轮 Agent 简短回应深度质疑的挑战。"""
+        rebuttals = {}
+        devil_content = devil_result.content if devil_result.success else ""
+
+        agents_to_rebut = [
+            (self.data_extractor, data_result, "data_extractor"),
+            (self.risk_assessor, risk_result, "risk_assessor"),
+            (self.compliance, compliance_result, "compliance_checker"),
+        ]
+
+        lang = self.language
+        for agent, original_result, key in agents_to_rebut:
+            if not original_result.success:
+                continue
+            prompt = (
+                f"深度质疑Agent对你的分析提出了以下质疑。请简短回应（不超过200字）：\n\n"
+                f"## 你的原始分析\n{original_result.content[:1500]}\n\n"
+                f"## 深度质疑Agent的质疑\n{devil_content[:1200]}\n\n"
+                f"请回应：质疑是否合理？你的分析需要调整吗？如果质疑有道理，补充什么信息可以解决？"
+                if lang == "zh" else
+                f"The Devil's Advocate raised the following challenges to your analysis. Respond briefly (under 150 words):\n\n"
+                f"## Your Analysis\n{original_result.content[:1500]}\n\n"
+                f"## Devil's Advocate Challenges\n{devil_content[:1200]}\n\n"
+                f"Respond: Is the challenge valid? Does your analysis need adjustment?"
+            )
+            try:
+                resp = self.llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    model="qwen-turbo", temperature=0.2, max_tokens=400,
+                )
+                rebuttals[key] = AgentResult(agent_name=agent.name, content=resp)
+                self.reporter.update(agent.name, "done",
+                                     "已回应质疑" if lang == "zh" else "Rebuttal complete")
+            except Exception as e:
+                rebuttals[key] = AgentResult(agent_name=agent.name,
+                                             success=False, error=str(e))
+        return rebuttals
+
+    def _synthesize_with_rebuttals(self, user_query, data_result, risk_result,
+                                   compliance_result, devil_result, rebuttals,
+                                   on_token=None):
+        """综合所有 Agent 输出 + 质疑 + 回应，生成最终报告。"""
+        lang = self.language
+
+        rebuttal_text = ""
+        for key, result in rebuttals.items():
+            if result.success:
+                rebuttal_text += f"\n### {key} 对质疑的回应\n{result.content}\n"
+
+        content = f"""## 用户原始问题
+{user_query}
+
+## 📊 数据提取 Agent 输出
+{data_result.content if data_result.success else f'[执行失败: {data_result.error}]'}
+
+## ⚠️ 风险评估 Agent 输出
+{risk_result.content if risk_result.success else f'[执行失败: {risk_result.error}]'}
+
+## 📋 合规审查 Agent 输出
+{compliance_result.content if compliance_result.success else f'[执行失败: {compliance_result.error}]'}
+
+## 🔍 深度质疑 Agent 输出
+{devil_result.content if devil_result.success else f'[执行失败: {devil_result.error}]'}
+
+## 🔄 Agent 对质疑的回应
+{rebuttal_text if rebuttal_text else '（无回应）'}
+
+请综合以上所有内容——原始分析、质疑、回应——生成最终报告。
+重要：
+- 如果质疑被采纳，报告中应体现调整后的结论
+- 如果质疑被驳回，说明为什么
+- 回应中的补充信息也应纳入报告
+- 每个事实标注出处，区分事实与推理"""
+        messages = [
+            {"role": "system", "content": self.synthesis_prompt},
+            {"role": "user", "content": content},
+        ]
+        if on_token:
+            return self.llm.chat_stream(messages, on_token=on_token)
+        return self.llm.chat(messages)
 
     def _log_agent_result(self, result: AgentResult):
         status = "done" if result.success else "error"
