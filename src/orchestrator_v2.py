@@ -610,22 +610,23 @@ class OrchestratorV2:
 请综合以上所有信息，生成最终报告。
 
 铁律：
-- 第一句话直接回答用户问题
-- **收集到的信息中如果有具体数字就直接用**——coordinator已经搜到了就不要再搜
-- 网络搜索到的数据优先采信，尤其是年代更新的数据
-- 每条事实标注来源：文档标页码，网络数据标媒体名+日期
-- 禁止把2025年数据当成2026年数据来回答"""
+- **你必须联网搜索**——findings 里可能有文档旧数据，你不能直接信
+- 搜索到最新数据后，用搜索结果回答，不要用 findings 里的过时数据
+- 用户问什么时间就答什么时间。问"2026年一季度"就不要答"2025年半年度"
+- 每条事实标注来源：搜索结果标注媒体名+日期，文档标注页码
+- 搜索结果和 findings 冲突时——以搜索结果为准"""
 
         messages = [
             {"role": "system", "content": self.synthesis_prompt},
             {"role": "user", "content": content},
         ]
 
-        # 不传 enable_search——coordinator 已经搜索够了，合成时只综合已有信息
-        # 传 enable_search 反而会让模型忽略传入的 findings 去搜自己的
+        # enable_search=True: qwen-max 自行搜索最新数据
+        # findings 提供上下文，但模型必须用搜索验证——以搜索结果为准
         if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
-        return self.llm.chat(messages, model="qwen-max")
+            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max",
+                                       enable_search=True)
+        return self.llm.chat(messages, model="qwen-max", enable_search=True)
 
     # ------------------------------------------------------------
     # 工具
