@@ -755,22 +755,65 @@ if st.session_state.file_processed:
             st.markdown(user_query)
         st.session_state.chat_history.append({"role": "user", "content": user_query})
 
-        # ── 运行多 Agent 分析 ──
+        # ── 运行分析 ──
         from src.llm.client import LLMClient, LLMConfig
-        from src.orchestrator_v2 import OrchestratorV2
+        from src.rag.engine import rewrite_query_for_rag
 
-        # 构建 LLM 客户端
         config = LLMConfig(
-            api_key=api_key,
-            api_base=api_base,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            api_key=api_key, api_base=api_base,
+            model=model, temperature=temperature, max_tokens=max_tokens,
         )
         llm_client = LLMClient(config)
-        orchestrator = OrchestratorV2(llm_client, language=st.session_state.language)
 
-        # ── 显示最终报告（流式输出）──
+        # ── RAG 检索文档上下文 ──
+        vs = st.session_state.vector_store
+        doc_text = ""
+        if not vs.is_empty:
+            try:
+                extra = rewrite_query_for_rag(user_query, api_key, st.session_state.language)
+            except Exception:
+                extra = []
+            rag = vs.search(user_query, top_k=5, extra_queries=extra, api_key=api_key)
+            if rag:
+                doc_text = "\n".join(
+                    f"[第{r.chunk.page}页] {r.chunk.text[:400]}" for r in rag[:4]
+                )
+
+        doc_type_str = st.session_state.get("doc_type", "未知")
+
+        # ── 构建 prompt：文档上下文 + 用户问题 → qwen-max 自己搜索+回答 ──
+        today_str = __import__('datetime').datetime.now().strftime("%Y年%m月%d日")
+
+        if web_search_enabled:
+            prompt = f"""今天是{today_str}。
+
+## 用户上传的文档（{doc_type_str}）
+{doc_text[:3000] if doc_text else '（文档未提供或为空）'}
+
+## 用户问题
+{user_query}
+
+请联网搜索最新信息来回答。如果文档有相关数据，对比文档和网络数据。文档可能是旧的（如2025年数据），网络能搜到更新的（如2026年数据）时以网络为准。
+
+要求：
+- 直接回答问题，结构清晰
+- 有具体数据就列出来，标注来源（媒体名+日期，文档标注页码）
+- 文档和网络数据时间不同时，优先用网络最新数据
+- 简明扼要，不要写论文"""
+            search_on = True
+        else:
+            prompt = f"""## 用户上传的文档（{doc_type_str}）
+{doc_text[:3000] if doc_text else '（文档未提供或为空）'}
+
+## 用户问题
+{user_query}
+
+请基于文档内容回答。文档有就给数据+页码，没有就说未找到。简明扼要。"""
+            search_on = False
+
+        messages = [{"role": "user", "content": prompt}]
+
+        # ── 流式输出 ──
         with st.chat_message("assistant"):
             report_placeholder = st.empty()
             streamed_text = []
@@ -779,15 +822,32 @@ if st.session_state.file_processed:
                 streamed_text.append(token)
                 report_placeholder.markdown("".join(streamed_text))
 
-            # 执行分析
-            result = orchestrator.run(
-                user_query,
-                st.session_state.vector_store,
-                api_key=api_key,
-                on_token=on_token,
-                web_search_enabled=web_search_enabled,
-                doc_type=st.session_state.get("doc_type", ""),
-            )
+            try:
+                if on_token and search_on:
+                    final_report = llm_client.chat_stream(
+                        messages, on_token=on_token, model="qwen-max",
+                        enable_search=True
+                    )
+                elif search_on:
+                    final_report = llm_client.chat(
+                        messages, model="qwen-max", enable_search=True
+                    )
+                elif on_token:
+                    final_report = llm_client.chat_stream(
+                        messages, on_token=on_token, model="qwen-max"
+                    )
+                else:
+                    final_report = llm_client.chat(
+                        messages, model="qwen-max"
+                    )
+            except Exception as e:
+                final_report = f"分析出错: {e}"
+
+            result = {
+                "final_report": final_report,
+                "execution_log": [],
+                "followup_questions": [],
+            }
 
             report = result.get("final_report", "")
             if not report:
