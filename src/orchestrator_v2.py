@@ -283,9 +283,13 @@ class OrchestratorV2:
                   f"Analysis complete ({round_num} rounds)" if lang == "en"
                   else f"分析完成（{round_num}轮）")
 
+        # 生成追问
+        followup = self._generate_followup_questions(user_query, final_report)
+
         return {
             "query": user_query,
             "final_report": final_report,
+            "followup_questions": followup,
             "execution_log": self._reporter_logs,
             "rounds": round_num,
         }
@@ -555,6 +559,41 @@ class OrchestratorV2:
     # ------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------
+
+    def _generate_followup_questions(self, user_query: str,
+                                      analysis_summary: str,
+                                      count: int = 4) -> list[str]:
+        """基于分析结果生成追问。"""
+        lang = self.language
+        summary = analysis_summary[:1500] if analysis_summary else ""
+        if not summary.strip():
+            return []
+
+        if lang == "zh":
+            prompt = f"""基于以下对话上下文，生成{count}个值得继续追问的问题。
+用户刚才问了：{user_query}
+系统的分析结论（摘要）：{summary}
+要求：紧跟分析中的关键发现、覆盖不同角度、每个不超过20字、直接输出列表每行一个以\"- \"开头"""
+        else:
+            prompt = f"""Generate {count} follow-up questions based on:
+Q: {user_query}
+A: {summary}
+Under 12 words each, output as list starting with \"- \""""
+
+        try:
+            resp = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                model="qwen-turbo", temperature=0.4, max_tokens=300,
+            )
+        except Exception:
+            return []
+
+        questions = []
+        for line in resp.strip().split("\n"):
+            line = line.strip().lstrip("- ").lstrip("0123456789. ").strip()
+            if line and len(line) > 3:
+                questions.append(line)
+        return questions[:count]
 
     def _log(self, agent: str, status: str, content: str = ""):
         self._reporter_logs.append({

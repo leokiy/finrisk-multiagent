@@ -784,7 +784,7 @@ if st.session_state.file_processed:
                 user_query,
                 st.session_state.vector_store,
                 api_key=api_key,
-                on_synthesis_token=on_token,
+                on_token=on_token,
                 web_search_enabled=web_search_enabled,
                 doc_type=st.session_state.get("doc_type", ""),
             )
