@@ -359,7 +359,11 @@ class Orchestrator:
 
 {agent_text}
 
-重要：用户问什么就答什么。如果只问了某一方面，只答那方面。不要输出全面报告。"""
+引用规则（重要）：
+- 每条事实性陈述必须标注来源。文档数据标注页码，网络数据标注媒体名或公告名+日期
+- 禁止模糊标注如\"网络来源\"\"网络搜索结果\"——必须写具体来源
+- 例：\"（来源: 文档第61页）\" 或 \"（来源: 东方财富网 2026-04-17）\"
+- 用户问什么就答什么。如果只问了某一方面，只答那方面。"""
                 messages = [
                     {"role": "system", "content": self.synthesis_prompt},
                     {"role": "user", "content": synthesis_prompt},
@@ -902,14 +906,14 @@ devils_advocate_verify: <query>"""
 
     def _execute_agent_searches(self, agent_search_queries: dict[str, list[str]],
                                 api_key: str) -> dict[str, list]:
-        """并行执行所有 Agent 的联网搜索——使用 DashScope enable_search。
+        """并行执行所有 Agent 的联网搜索——DDGS(拿URL) + enable_search(拿内容) 双路。
 
-        每个 Agent 用自己的搜索查询调用 DashScope，LLM 自行搜索并返回结构化结果。
-        比 DDGS snippet 更准、更长、更可读。
+        DDGS 返回真实网页链接（可点击），enable_search 返回 LLM 搜索总结。
+        两路结果合并，DDGS 结果在前（有 URL），enable_search 结果在后（内容详实）。
         """
         from datetime import datetime
         from src.llm.client import LLMClient, LLMConfig
-        from src.search.web_search import WebResult
+        from src.search.web_search import WebResult, search_web
 
         # 确保 dashscope 全局 api_key（线程中需要）
         if api_key:
@@ -921,35 +925,49 @@ devils_advocate_verify: <query>"""
 
         def _search_for_agent(agent_key: str, queries: list[str]):
             results = []
-            # 合并该Agent的所有查询为一次搜索
+
+            # 路1: DDGS 搜索 → 真实 URL + snippet
+            for q in queries[:2]:
+                if not q:
+                    continue
+                try:
+                    ddgs_results = search_web(q, api_key=api_key, max_results=3,
+                                             language=self.language)
+                    if ddgs_results:
+                        results.extend(ddgs_results)
+                except Exception:
+                    pass
+
+            # 路2: enable_search → LLM 搜索总结（内容更详实）
             combined = " | ".join(q for q in queries[:2] if q)
-            if not combined:
-                return agent_key, results
-
-            prompt = (
-                f"今天是{today}。请联网搜索以下内容，返回具体数据、来源和日期。"
-                f"不要编造数据，找不到就说找不到：\n{combined}"
-                if self.language == "zh" else
-                f"Today is {today}. Search the web for the following. "
-                f"Return specific data, sources and dates. Do not fabricate: {combined}"
-            )
-
-            try:
-                config = LLMConfig(api_key=api_key, model="qwen-plus",
-                                  temperature=0.1, max_tokens=1000)
-                client = LLMClient(config)
-                resp = client.chat(
-                    [{"role": "user", "content": prompt}],
-                    enable_search=True,
+            if combined:
+                prompt = (
+                    f"今天是{today}。请联网搜索以下内容，返回具体数据、来源和日期。"
+                    f"在回答中尽量引用网页链接：\n{combined}"
+                    if self.language == "zh" else
+                    f"Today is {today}. Search the web for: {combined}. Cite URLs."
                 )
-                if resp and len(resp.strip()) > 10:
-                    results.append(WebResult(
-                        title=f"DashScope搜索: {combined[:60]}",
-                        url="",
-                        snippet=resp.strip(),
-                    ))
-            except Exception:
-                pass  # 单个搜索失败不阻塞
+
+                try:
+                    config = LLMConfig(api_key=api_key, model="qwen-plus",
+                                      temperature=0.1, max_tokens=1000)
+                    client = LLMClient(config)
+                    resp = client.chat(
+                        [{"role": "user", "content": prompt}],
+                        enable_search=True,
+                    )
+                    if resp and len(resp.strip()) > 10:
+                        # 尝试从响应中提取 URL
+                        import re as _re
+                        urls = _re.findall(r'https?://[^\s)\]）】】]+', resp)
+                        results.append(WebResult(
+                            title=f"AI搜索: {combined[:60]}",
+                            url="\n".join(urls[:5]) if urls else "",
+                            snippet=resp.strip(),
+                        ))
+                except Exception:
+                    pass
+
             return agent_key, results
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -1102,13 +1120,16 @@ devils_advocate_verify: <query>"""
         today = datetime.now().strftime("%Y年%m月%d日" if lang == "zh" else "%B %d, %Y")
 
         if web_search_enabled and web_results:
-            # ── 有预搜索结果：直接注入，标清来源 ──
+            # ── 有预搜索结果：注入，URL 做成可点击链接 ──
             web_text_parts = []
             for i, wr in enumerate(web_results[:5], 1):
                 snippet = wr.snippet[:800] if wr.snippet else ""
                 title = wr.title[:120] if wr.title else ""
+                url = wr.url[:300] if wr.url else ""
                 if snippet:
-                    label = f"[搜{i}] {title}" if title else f"[搜{i}]"
+                    label = f"[搜{i}] {title}"
+                    if url:
+                        label += f" 链接: {url}"
                     web_text_parts.append(f"{label}\n{snippet}")
             web_text = "\n\n".join(web_text_parts) if web_text_parts else "（无）"
 
@@ -1118,9 +1139,9 @@ devils_advocate_verify: <query>"""
 文档：{doc_data}
 网络搜索：{web_text}
 规则：
-- 从搜索结果中复制数字。如搜到\"净利润57.35亿元\"就写\"净利润57.35亿元（来源: [搜X] 标题）\"
-- 如果你的答案来自某个具体搜索结果，标注该结果的标题或日期，比如\"（来源: 东方财富网 2026-04-17）\"或\"（来源: 中际旭创2026年一季报公告）\"
-- 禁止写\"来源：网络搜索结果X\"这种模糊标注——必须写明媒体名/公告名/日期
+- 从搜索结果中复制数字。如搜到净利润57.35亿元就写：**净利润57.35亿元** ([东方财富网](https://...)，2026-04-17)
+- 如果搜索结果有URL链接，必须做成可点击的Markdown链接格式：[来源名称](URL)
+- 禁止写\"来源：网络搜索结果X\"——必须写明具体来源并可点击
 - 文档和搜索都没数据才说未找到
 - 最多3行"""
             else:
