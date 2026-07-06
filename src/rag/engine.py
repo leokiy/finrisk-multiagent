@@ -237,34 +237,106 @@ class VectorStore:
     def search(self, query: str, top_k: int = 20,
                extra_queries: list[str] | None = None,
                **kwargs) -> list[RetrievalResult]:
-        """主检索: RAG向量检索 + 前置页降权 + 多路融合。"""
+        """主检索: 关键词精确搜索 + FAISS语义检索混合。
+
+        关键词命中 → 高分锚定
+        FAISS语义检索 → 补盲区（概念性问题如"盈利质量"）
+        两路结果去重合并，关键词结果优先。
+        """
         if self.is_empty:
             return []
 
+        # ── 第一路：关键词精确搜索 ──
+        kw_results = self.keyword_search(query, top_k=top_k)
+
+        # ── 第二路：FAISS 语义检索 ──
         queries = [query]
         if extra_queries:
             queries.extend(extra_queries)
 
-        all_results = []
+        faiss_results = []
         for q in queries:
             vec = self._embed_batch([q])[0].reshape(1, -1).astype(np.float32)
-            k = min(top_k * 2, len(self._chunks))  # 多搜一些，后面要降权
+            k = min(top_k * 2, len(self._chunks))
             scores, indices = self._index.search(vec, k)
             for score, idx in zip(scores[0], indices[0]):
                 if 0 <= idx < len(self._chunks):
                     chunk = self._chunks[idx]
                     adjusted_score = float(score)
-
-                    # 前置页降权：前5页（目录、释义、声明等）乘以 0.4
                     if chunk.page <= 5:
                         adjusted_score *= 0.4
-
-                    all_results.append(
+                    faiss_results.append(
                         RetrievalResult(chunk=chunk, score=adjusted_score)
                     )
 
-        ranked = self._dedup_rank(all_results, top_k)
-        return ranked[:top_k]
+        # ── 合并去重：关键词结果放前面，FAISS结果补后面 ──
+        seen_sigs = set()
+        merged = []
+
+        # 先放关键词结果（高分、精确）
+        for r in kw_results:
+            sig = r.chunk.text[:80].strip()
+            if sig not in seen_sigs:
+                seen_sigs.add(sig)
+                merged.append(r)
+
+        # 再补 FAISS 结果（去重）
+        for r in self._dedup_rank(faiss_results, top_k * 2):
+            sig = r.chunk.text[:80].strip()
+            if sig not in seen_sigs:
+                seen_sigs.add(sig)
+                merged.append(r)
+                if len(merged) >= top_k:
+                    break
+
+        return merged[:top_k]
+
+    def keyword_search(self, query: str, top_k: int = 10) -> list[RetrievalResult]:
+        """关键词精确搜索：对 chunk 文本做关键词 + 正则匹配。
+
+        比 FAISS 向量检索更精准——搜"净利润"就只返回含"净利润"的段落，
+        不会因为语义相似度返回目录页。
+
+        支持多关键词（空格分隔），匹配越多得分越高。
+        """
+        if self.is_empty:
+            return []
+
+        # 提取关键词
+        keywords = [kw.strip() for kw in query.replace("？", " ").replace("?", " ").split()
+                    if len(kw.strip()) >= 2]
+        if not keywords:
+            return []
+
+        scored = []
+        for idx, chunk in enumerate(self._chunks):
+            text = chunk.text
+            score = 0
+            for kw in keywords:
+                count = text.count(kw)
+                if count > 0:
+                    # 匹配次数越多得分越高，但做对数衰减防止长文本刷分
+                    score += min(count, 5) * 0.2
+            if score > 0:
+                # 前置页降权（同FAISS规则）
+                if chunk.page <= 5:
+                    score *= 0.4
+                scored.append((score, idx, chunk))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # 去重
+        seen_sigs = set()
+        results = []
+        for score, idx, chunk in scored[:top_k * 2]:
+            sig = chunk.text[:80].strip()
+            if sig not in seen_sigs:
+                seen_sigs.add(sig)
+                results.append(RetrievalResult(chunk=chunk, score=min(score, 0.99)))
+                if len(results) >= top_k:
+                    break
+
+        return results
 
     def search_tables(self, query: str, top_k: int = 5) -> list[DocumentTable]:
         """关键词匹配检索相关表格。"""
