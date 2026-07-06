@@ -533,29 +533,29 @@ class OrchestratorV2:
 ## 文档关键段落
 {final_doc}
 
-## 分析过程中收集的信息
+## 分析过程中收集的信息（包含网络搜索和Agent分析结果）
 {findings_text}
 {priority_hint}
 
 请综合以上所有信息，生成最终报告。
 
 铁律：
-- 第一句话直接回答用户问题。用户问什么时间就答什么时间。
-- 用户问"2026年一季度"，就不要答"2025年半年度"。时间段必须严格匹配。
-- 网络搜索到的2026数据 vs 文档中的2025数据→选2026的网络数据。年代更新的优先。
-- 每条事实标注来源：文档标注页码，网络数据标注媒体名+日期
-- 禁止把2025年数据当成2026年数据来回答
-- 详略匹配问题复杂度"""
+- 第一句话直接回答用户问题
+- **收集到的信息中如果有具体数字就直接用**——coordinator已经搜到了就不要再搜
+- 网络搜索到的数据优先采信，尤其是年代更新的数据
+- 每条事实标注来源：文档标页码，网络数据标媒体名+日期
+- 禁止把2025年数据当成2026年数据来回答"""
 
         messages = [
             {"role": "system", "content": self.synthesis_prompt},
             {"role": "user", "content": content},
         ]
 
+        # 不传 enable_search——coordinator 已经搜索够了，合成时只综合已有信息
+        # 传 enable_search 反而会让模型忽略传入的 findings 去搜自己的
         if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max",
-                                       enable_search=True)
-        return self.llm.chat(messages, model="qwen-max", enable_search=True)
+            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
+        return self.llm.chat(messages, model="qwen-max")
 
     # ------------------------------------------------------------
     # 工具
