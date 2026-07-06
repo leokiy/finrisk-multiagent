@@ -605,16 +605,20 @@ class OrchestratorV2:
                     f"[p{r.chunk.page}] {r.chunk.text[:300]}" for r in results[:3]
                 )
 
-        findings_text = "\n\n---\n\n".join(findings[-8:])  # 最近 8 轮发现
-        findings_text = findings_text[:6000]
+        # ── 强制最终搜索：无论如何都搜一次，确保有最新数据 ──
+        final_web_text = ""
+        try:
+            final_web = self._search_web(user_query, api_key)
+            if final_web:
+                final_web_text = "\n".join(
+                    f"[{w.get('title','')}] {w.get('snippet','')[:500]}"
+                    for w in final_web[:4]
+                )
+        except Exception:
+            pass
 
-        # 强制提示：优先采信网络数据
-        priority_hint = (
-            "\n\n**重要：上述信息中如果网络搜索到的数据与文档数据时间不同，"
-            "以网络搜索的最新数据为准。文档只有2025年数据，网络有2026年数据时，答2026年的。**"
-            if lang == "zh" else
-            "\n\n**IMPORTANT: If web search found newer data than the document, use the web data.**"
-        )
+        findings_text = "\n\n---\n\n".join(findings[-8:])
+        findings_text = findings_text[:6000]
 
         content = f"""## 用户问题
 {user_query}
@@ -622,30 +626,25 @@ class OrchestratorV2:
 ## 文档关键段落
 {final_doc}
 
-## 分析过程中收集的信息（包含网络搜索和Agent分析结果）
+## 联网搜索结果（系统自动搜索，你必须使用这些数据）
+{final_web_text}
+
+## 分析过程中收集的信息
 {findings_text}
-{priority_hint}
 
-请综合以上所有信息，生成最终报告。
-
-铁律：
-- **你必须联网搜索**——findings 里可能有文档旧数据，你不能直接信
-- 搜索到最新数据后，用搜索结果回答，不要用 findings 里的过时数据
-- 用户问什么时间就答什么时间。问"2026年一季度"就不要答"2025年半年度"
-- 每条事实标注来源：搜索结果标注媒体名+日期，文档标注页码
-- 搜索结果和 findings 冲突时——以搜索结果为准"""
+请综合以上所有信息生成最终报告。
+重要：上面的"联网搜索结果"是系统刚刚为你搜索到的。你必须使用这些数据来回答。
+如果搜索结果有最新数据而文档是旧的，以搜索结果为准。"""
 
         messages = [
             {"role": "system", "content": self.synthesis_prompt},
             {"role": "user", "content": content},
         ]
 
-        # enable_search=True: qwen-max 自行搜索最新数据
-        # findings 提供上下文，但模型必须用搜索验证——以搜索结果为准
+        # 不传 enable_search——代码已经在上面强制搜索了，结果在 prompt 里
         if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max",
-                                       enable_search=True)
-        return self.llm.chat(messages, model="qwen-max", enable_search=True)
+            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
+        return self.llm.chat(messages, model="qwen-max")
 
     # ------------------------------------------------------------
     # 工具
