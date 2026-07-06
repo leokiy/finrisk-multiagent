@@ -518,8 +518,10 @@ class OrchestratorV2:
 
     def _format_observations(self, results: dict[str, list],
                              lang: str) -> str:
-        """把工具执行结果格式化为 LLM 可读的观察文本。"""
+        """格式化观察文本，同时提取各 Agent 的 [COMPLETE]/[NEED_MORE] 声明。"""
         parts = []
+        agent_statuses = []
+
         for key, items in results.items():
             parts.append(f"\n### {key}")
             for item in items:
@@ -534,9 +536,35 @@ class OrchestratorV2:
                 elif t == "analyst_output":
                     status = "✓" if item.get("success") else "✗"
                     name = item.get("analyst", "?")
-                    parts.append(f"[{name} {status}] {item['content'][:500]}")
+                    content = item.get("content", "")
+
+                    # 检测完整性声明
+                    if "[COMPLETE]" in content:
+                        agent_statuses.append(f"[{name}] COMPLETE")
+                    elif "[NEED_MORE]" in content:
+                        need_idx = content.find("[NEED_MORE]")
+                        need_text = content[need_idx:need_idx+300]
+                        agent_statuses.append(f"[{name}] NEED_MORE: {need_text}")
+                    else:
+                        agent_statuses.append(f"[{name}] 未声明")
+
+                    parts.append(f"[{name} {status}] {content[:500]}")
                 else:
                     parts.append(f"[{t}] {item.get('text', str(item))[:200]}")
+
+        # 汇总 Agent 状态，引导 Coordinator 决策
+        if agent_statuses:
+            parts.insert(0, "\n## Agent 完整性汇总")
+            all_complete = all("COMPLETE" in s and "NEED_MORE" not in s
+                              for s in agent_statuses)
+            if all_complete:
+                parts.insert(1, "**所有 Agent 确认完成 → 你下一轮必须 need_more: false**")
+            else:
+                incomplete = [s for s in agent_statuses if "NEED_MORE" in s]
+                parts.insert(1, f"**{len(incomplete)}个Agent需要更多信息 → 你必须继续搜索**")
+                for s in agent_statuses:
+                    parts.insert(2, f"- {s}")
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------
