@@ -13,13 +13,16 @@ import time
 import tempfile
 from pathlib import Path
 
+# 加载 .env 文件中的环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 # 确保项目根目录在 sys.path 中
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Streamlit 每次 rerun 都重新执行 app.py，但 Python 的 sys.modules 会缓存
-# 已导入的模块。强制清除项目源码模块的缓存，确保每次运行都是最新代码。
+# Streamlit 每次 rerun 都重新执行 app.py，强制清除项目源码模块的缓存
 _PROJECT_MODULES = [m for m in sys.modules if m.startswith("src.")]
 for _m in _PROJECT_MODULES:
     del sys.modules[_m]
@@ -53,7 +56,7 @@ I18N = {
         "about_title": "📖 关于本系统",
         "about_text": "Coordinator 驱动的多 Agent 金融风险分析平台。自动判断问题类型——简单查询自己搜、专项分析派专家、全面评估启动完整编队。Agent 分析后自判信息是否足够，不够就告诉 Coordinator 需要搜什么。",
         "upload_label": "📄 上传金融文档",
-        "upload_help": "支持：年报、招股说明书、债券募集说明书、风险披露报告等 PDF 或文本文件",
+        "upload_help": "支持：年报、招股说明书、债券募集说明书、风险披露报告等 PDF 或文本文件。也可不传文档直接提问。",
         "file_name": "文件名",
         "file_size": "文件大小",
         "upload_placeholder": "👈 上传一份金融文档开始分析\n\n支持 PDF / TXT / MD 格式",
@@ -105,10 +108,6 @@ I18N = {
         "status_done": "✅ 完成",
         "status_error": "❌ 出错",
         "status_waiting": "⏸️ 等待中",
-        "round1_msg": "启动第一轮分析：数据提取、风险评估、合规审查并行执行...",
-        "round2_msg": "正在审阅前三方分析结果，寻找盲点和矛盾...",
-        "round3_msg": "正在综合所有分析结果，生成最终报告...",
-        "analysis_done": "分析完成。",
     },
     "en": {
         "title": "🏦 FinRisk MultiAgent",
@@ -132,7 +131,7 @@ I18N = {
         "about_title": "📖 About",
         "about_text": "Coordinator-driven multi-agent financial risk analysis. Auto-judges question type: simple queries answered directly, analytical questions dispatched to relevant agents, comprehensive assessments run the full team. Agents self-assess completeness and request searches when needed.",
         "upload_label": "📄 Upload Financial Document",
-        "upload_help": "Supports: Annual reports, prospectuses, bond offering circulars, risk disclosures (PDF/TXT/MD)",
+        "upload_help": "Supports: Annual reports, prospectuses, bond offering circulars, risk disclosures (PDF/TXT/MD). Or ask without uploading.",
         "file_name": "File Name",
         "file_size": "File Size",
         "upload_placeholder": "👈 Upload a financial document to start\n\nSupports PDF / TXT / MD formats",
@@ -184,10 +183,6 @@ I18N = {
         "status_done": "✅ Done",
         "status_error": "❌ Error",
         "status_waiting": "⏸️ Waiting",
-        "round1_msg": "Starting Round 1: Data Extraction, Risk Assessment, Compliance Check running in parallel...",
-        "round2_msg": "Reviewing outputs from all three agents, searching for blind spots and contradictions...",
-        "round3_msg": "Synthesizing all analysis results into final report...",
-        "analysis_done": "Analysis complete.",
     },
 }
 
@@ -203,16 +198,9 @@ def t(key: str, **kwargs) -> str:
 
 def _generate_doc_questions(vector_store, api_key: str, language: str,
                             filename: str) -> list[str]:
-    """扫描文档，生成针对该文档的个性化推荐提问。
-
-    取文档中最有信息量的几个文本块，让 LLM 识别：
-      - 文档类型 / 主体名称 / 行业
-      - 文档中最突出的风险信号
-      - 3-5 个值得深入提问的方向
-    """
+    """扫描文档，生成针对该文档的个性化推荐提问。"""
     from src.llm.client import LLMClient, LLMConfig
 
-    # 取前 6 个 chunk 作为文档概览上下文
     sample_chunks = vector_store.search(
         "风险 负债 收入 利润 资产 合规 担保 关联交易 现金流 行业 竞争 经营",
         top_k=6, api_key=api_key
@@ -250,7 +238,7 @@ def _generate_doc_questions(vector_store, api_key: str, language: str,
 - 问题4
 - 问题5"""
 
-    scan_prompt_en = f"""You are a financial document analysis expert. Quickly scan the following document excerpts and complete two tasks.
+    scan_prompt_en = f"""You are a financial document analysis expert. Quickly scan the following document excerpts.
 
 ## Document Info
 Filename: {filename}
@@ -258,26 +246,11 @@ Filename: {filename}
 ## Document Excerpts
 {context[:4000]}
 
-## Tasks
+Generate 3-5 recommended questions based on the document's actual content.
+- Under 15 words each
+- Output as list starting with "- "
 
-### Task 1: Document Overview (1-2 sentences)
-- What type of document is this? (Annual report / Prospectus / Offering circular / Research report / Other?)
-- What is the entity name and industry?
-- What are the 1-2 most prominent risk signals?
-
-### Task 2: Generate 3-5 Recommended Questions
-Based on the document's actual content (do NOT fabricate information), generate 3-5 questions worth investigating deeper.
-- Questions should be specific, referencing real data, events, or risks found in the document
-- Cover different angles: financial health, risk exposure, compliance, industry outlook, etc.
-- Each question under 15 words
-- Output as a list, one per line, starting with "- "
-
-Only output the question list from Task 2, in this format:
-- Question 1
-- Question 2
-- Question 3
-- Question 4
-- Question 5"""
+Only output the question list:"""
 
     prompt = scan_prompt_zh if language == "zh" else scan_prompt_en
 
@@ -285,19 +258,16 @@ Only output the question list from Task 2, in this format:
     client = LLMClient(config)
     resp = client.chat([{"role": "user", "content": prompt}])
 
-    # 解析问题列表
     questions = []
     for line in resp.strip().split("\n"):
         line = line.strip()
-        if line.startswith("- ") or line.startswith("- "):
+        if line.startswith("- ") or line.startswith("* "):
             q = line[2:].strip()
             if q and len(q) > 3:
                 questions.append(q)
         elif line and len(line) > 3 and "?" in line:
-            # 兼容不规范的格式（没有 - 前缀）
             questions.append(line.strip())
 
-    # 至少保证有 3 个问题，不够就用默认的补齐
     if len(questions) < 3:
         fallback = I18N[language]["quick_questions"]
         questions += fallback[len(questions):]
@@ -317,119 +287,44 @@ st.set_page_config(
 )
 
 # ============================================================================
-# 样式
+# 样式（简洁干净）
 # ============================================================================
 
 st.markdown("""
 <style>
-    /* ── 全局 ── */
-    .main-title {
-        font-size: 2rem; font-weight: 700; margin-bottom: 0.3rem;
-        text-align: center; color: #1a3c5e;
-    }
-    .subtitle {
-        font-size: 0.95rem; color: #888; margin-bottom: 2rem;
-        text-align: center;
-    }
-    .section-title {
-        font-size: 1.1rem; font-weight: 700; color: #2d6a9f;
-        text-align: center; margin: 2rem 0 1rem 0;
-    }
+    .main-title { font-size: 2rem; font-weight: 700; text-align: center; color: #1a3c5e; margin-bottom: 0.3rem; }
+    .subtitle { font-size: 0.95rem; color: #888; text-align: center; margin-bottom: 1rem; }
+    .section-title { font-size: 1.1rem; font-weight: 700; color: #2d6a9f; text-align: center; margin: 2rem 0 1rem 0; }
 
-    /* ── Pipeline 流程动画 ── */
-    .pipeline-container {
-        display: flex; align-items: center; justify-content: center;
-        gap: 0; padding: 1rem 0 1.5rem 0; flex-wrap: nowrap;
-    }
-    .pipeline-step {
-        background: linear-gradient(135deg, #1a3c5e 0%, #2d6a9f 100%);
-        color: #fff; border-radius: 10px; padding: 14px 22px;
-        text-align: center; min-width: 90px; font-weight: 600;
-        font-size: 0.9rem; box-shadow: 0 3px 10px rgba(26,60,94,0.15);
-        animation: fadeInUp 0.5s ease-out both;
-        flex-shrink: 0;
-    }
+    .pipeline-container { display: flex; align-items: center; justify-content: center; gap: 0; padding: 1rem 0 1.5rem 0; }
+    .pipeline-step { background: linear-gradient(135deg, #1a3c5e 0%, #2d6a9f 100%); color: #fff; border-radius: 10px; padding: 14px 22px; text-align: center; min-width: 90px; font-weight: 600; font-size: 0.9rem; box-shadow: 0 3px 10px rgba(26,60,94,0.15); animation: fadeInUp 0.5s ease-out both; flex-shrink: 0; }
     .pipeline-step:nth-child(1)  { animation-delay: 0.00s; }
     .pipeline-step:nth-child(3)  { animation-delay: 0.10s; }
     .pipeline-step:nth-child(5)  { animation-delay: 0.20s; }
     .pipeline-step:nth-child(7)  { animation-delay: 0.30s; }
     .pipeline-step:nth-child(9)  { animation-delay: 0.40s; }
-    .pipeline-arrow {
-        font-size: 1.2rem; color: #bbb; margin: 0 6px;
-        flex-shrink: 0; user-select: none;
-        animation: arrowPulse 2s infinite;
-    }
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(16px); }
-        to   { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes arrowPulse {
-        0%, 100% { opacity: 0.25; }
-        50%      { opacity: 0.70; }
-    }
+    .pipeline-arrow { font-size: 1.2rem; color: #bbb; margin: 0 6px; flex-shrink: 0; user-select: none; animation: arrowPulse 2s infinite; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes arrowPulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.70; } }
 
-    /* ── Agent 卡片 ── */
-    .agent-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 16px; margin: 1rem 0 1.5rem 0;
-    }
-    @media (max-width: 960px)  { .agent-grid { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 520px)  { .agent-grid { grid-template-columns: 1fr; } }
-    .agent-feature-card {
-        border: 1px solid #e8eaed; border-radius: 12px;
-        padding: 24px 18px 20px 18px; text-align: center;
-        background: #fafbfc;
-        transition: transform 0.2s, box-shadow 0.2s;
-        display: flex; flex-direction: column;
-        align-items: center; justify-content: flex-start;
-        height: 100%; min-height: 200px;
-    }
-    .agent-feature-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-    }
-    .agent-feature-icon {
-        font-size: 2rem; margin-bottom: 10px; line-height: 1;
-    }
-    .agent-feature-name {
-        font-weight: 700; font-size: 0.95rem; color: #1a3c5e;
-        margin-bottom: 8px; line-height: 1.3;
-    }
-    .agent-feature-desc {
-        font-size: 0.82rem; color: #666; line-height: 1.55;
-        flex-grow: 1;
-    }
+    .agent-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 1rem 0 1.5rem 0; }
+    @media (max-width: 960px) { .agent-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 520px) { .agent-grid { grid-template-columns: 1fr; } }
+    .agent-feature-card { border: 1px solid #e8eaed; border-radius: 12px; padding: 24px 18px 20px 18px; text-align: center; background: #fafbfc; transition: transform 0.2s, box-shadow 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100%; min-height: 200px; }
+    .agent-feature-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.08); }
+    .agent-feature-icon { font-size: 2rem; margin-bottom: 10px; line-height: 1; }
+    .agent-feature-name { font-weight: 700; font-size: 0.95rem; color: #1a3c5e; margin-bottom: 8px; }
+    .agent-feature-desc { font-size: 0.82rem; color: #666; line-height: 1.55; flex-grow: 1; }
 
-    /* ── 技术栈标签 ── */
-    .tech-tag {
-        display: inline-block; background: #e8f0fe; color: #1a73e8;
-        border-radius: 4px; padding: 3px 10px; font-size: 0.8rem;
-        margin: 3px; font-weight: 500; line-height: 1.6;
-    }
-    .tech-tags-wrap {
-        text-align: center; margin-bottom: 2rem; line-height: 2;
-    }
+    .tech-tag { display: inline-block; background: #e8f0fe; color: #1a73e8; border-radius: 4px; padding: 3px 10px; font-size: 0.8rem; margin: 3px; font-weight: 500; }
+    .tech-tags-wrap { text-align: center; margin-bottom: 2rem; line-height: 2; }
 
-    /* ── 文件信息 ── */
-    .file-ready-box {
-        background: #f0f7f0; border: 1px solid #c8e6c9;
-        border-radius: 8px; padding: 12px 16px; margin: 0.5rem 0;
-        font-size: 0.9rem;
-    }
+    .disclaimer { color: #aaa; font-size: 0.75rem; margin-top: 2rem; text-align: center; }
 
-    /* ── 免责声明 ── */
-    .disclaimer  { color: #aaa; font-size: 0.75rem; margin-top: 2rem; text-align: center; }
-
-    /* ── 状态指示器 ── */
     .agent-running { border-left: 4px solid #1a73e8; animation: pulse 1.5s infinite; }
     .agent-done    { border-left: 4px solid #0f9d58; }
     .agent-error   { border-left: 4px solid #d93025; }
-    @keyframes pulse {
-        0%   { opacity: 1.0; }
-        50%  { opacity: 0.6; }
-        100% { opacity: 1.0; }
-    }
+    @keyframes pulse { 0% { opacity: 1.0; } 50% { opacity: 0.6; } 100% { opacity: 1.0; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -437,7 +332,6 @@ st.markdown("""
 # Session State 初始化
 # ============================================================================
 
-# 分析状态初始化（重置时清除这些）
 for key, default in [
     ("vector_store", None),
     ("file_processed", False),
@@ -448,13 +342,10 @@ for key, default in [
     if key not in st.session_state:
         st.session_state[key] = default
 
-# 语言偏好（独立于分析状态，不随重置清除）
 if "language" not in st.session_state:
     st.session_state.language = "zh"
 if "_qkey" not in st.session_state:
     st.session_state._qkey = 0
-if "_refresh_questions" not in st.session_state:
-    st.session_state._refresh_questions = False
 
 # ============================================================================
 # 侧边栏 — 配置
@@ -464,7 +355,6 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/bank-building.png", width=64)
     st.markdown("## ⚙️ " + ("系统配置" if st.session_state.language == "zh" else "Settings"))
 
-    # -- 语言选择 --
     lang = st.selectbox(
         t("language"),
         ["中文", "English"],
@@ -477,41 +367,29 @@ with st.sidebar:
 
     st.divider()
 
-    # -- API 配置 --
     st.markdown("### " + t("api_settings"))
 
     api_provider = st.selectbox(
         t("api_provider"),
         [t("api_provider_dashscope"), t("api_provider_custom")],
     )
-
     is_dashscope = api_provider == t("api_provider_dashscope")
 
     if is_dashscope:
         api_key = st.text_input(
-            t("api_key"),
-            type="password",
+            t("api_key"), type="password",
             value=os.getenv("DASHSCOPE_API_KEY", ""),
             help=t("api_key_help"),
         )
         api_base = ""
-        model = st.selectbox(
-            t("model"),
-            ["qwen-plus", "qwen-max", "qwen-turbo"],
-            index=0,
-            help=t("model_help"),
-        )
+        model = st.selectbox(t("model"), ["qwen-plus", "qwen-max", "qwen-turbo"], index=0, help=t("model_help"))
     else:
-        api_key = st.text_input(
-            t("api_key_custom"),
-            type="password",
-        )
+        api_key = st.text_input(t("api_key_custom"), type="password")
         api_base = st.text_input(t("api_base"), value="https://api.openai.com/v1")
         model = st.text_input(t("model"), value="gpt-4o")
 
     st.divider()
 
-    # -- 联网搜索 --
     web_search_enabled = st.checkbox(
         "🌐 联网搜索" if st.session_state.language == "zh" else "🌐 Web Search",
         value=True,
@@ -522,14 +400,12 @@ with st.sidebar:
 
     st.divider()
 
-    # -- 模型参数 --
     st.markdown("### " + t("model_params"))
     temperature = st.slider(t("temperature"), 0.0, 1.0, 0.3, 0.05, help=t("temperature_help"))
     max_tokens = st.slider(t("max_tokens"), 1024, 8192, 4096, 256, help=t("max_tokens_help"))
 
     st.divider()
 
-    # -- 关于 --
     st.markdown("### " + t("about_title"))
     st.markdown(t("about_text"))
     if st.session_state.language == "zh":
@@ -537,8 +413,6 @@ with st.sidebar:
         <div style="font-size:0.85rem; line-height:1.7; color:#555">
         <b>四个专业 Agent</b><br>
         📊 数据提取 &nbsp; ⚠️ 风险评估 &nbsp; 📋 合规审查 &nbsp; 🔍 深度质疑<br><br>
-        <b>工作方式</b><br>
-        上传文档 → 提问 → Agent 并行分析 → 综合报告<br><br>
         <a href="https://github.com/leokiy/finrisk-multiagent">GitHub</a> · <a href="https://github.com/leokiy/finrisk-multiagent/issues">Issues</a>
         </div>
         """, unsafe_allow_html=True)
@@ -547,8 +421,6 @@ with st.sidebar:
         <div style="font-size:0.85rem; line-height:1.7; color:#555">
         <b>Four Specialist Agents</b><br>
         📊 Data Extraction &nbsp; ⚠️ Risk Assessment &nbsp; 📋 Compliance &nbsp; 🔍 Devil's Advocate<br><br>
-        <b>How it works</b><br>
-        Upload → Ask → Agents analyze → Report<br><br>
         <a href="https://github.com/leokiy/finrisk-multiagent">GitHub</a> · <a href="https://github.com/leokiy/finrisk-multiagent/issues">Issues</a>
         </div>
         """, unsafe_allow_html=True)
@@ -557,20 +429,18 @@ with st.sidebar:
 # 主页面
 # ============================================================================
 
-st.markdown(f'<div style="font-size:1.8rem;font-weight:700;color:#1a3c5e;margin-bottom:0.3rem">{t("title")}</div>', unsafe_allow_html=True)
-st.markdown(f'<p style="font-size:0.9rem;color:#888;margin-bottom:1.2rem">{t("subtitle")}</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="main-title">{t("title")}</div>', unsafe_allow_html=True)
+st.markdown(f'<p class="subtitle">{t("subtitle")}</p>', unsafe_allow_html=True)
 
 # ============================================================================
-# 文件上传区域
+# 文件上传
 # ============================================================================
 
 col_upload, col_info = st.columns([2, 1])
 
 with col_upload:
     uploaded_file = st.file_uploader(
-        t("upload_label"),
-        type=["pdf", "txt", "md"],
-        help=t("upload_help"),
+        t("upload_label"), type=["pdf", "txt", "md"], help=t("upload_help"),
     )
 
 with col_info:
@@ -578,10 +448,8 @@ with col_info:
         file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
         st.metric(t("file_name"), uploaded_file.name)
         st.metric(t("file_size"), f"{file_size_mb:.1f} MB")
-        # 保存文件名到 session state，防止 rerun 时丢失
         st.session_state._uploaded_filename = uploaded_file.name
     elif st.session_state.file_processed:
-        # rerun 后 uploaded_file 可能为 None，用缓存的文件名
         cached_name = st.session_state.get("_uploaded_filename", "unknown")
         st.metric(t("file_name"), cached_name)
     else:
@@ -592,58 +460,44 @@ with col_info:
 # ============================================================================
 
 if uploaded_file and not st.session_state.file_processed:
-    # 文件大小限制 (20MB)
     file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
     if file_size_mb > 20:
-        st.error("文件过大（{:.1f}MB），请上传小于20MB的文件。"
+        st.error(("文件过大（{:.1f}MB），请上传小于20MB的文件。"
                  if st.session_state.language == "zh"
-                 else "File too large ({:.1f}MB). Please upload files under 20MB.".format(file_size_mb))
+                 else "File too large ({:.1f}MB). Please upload files under 20MB.").format(file_size_mb))
         st.stop()
 
-    # 校验 API Key
     if not api_key:
         st.error(t("api_key_warning"))
         st.stop()
 
     st.session_state.processing_file = True
-    # 缓存文件信息
     st.session_state._file_bytes = uploaded_file.getvalue()
     st.session_state._uploaded_filename = uploaded_file.name
 
     with st.status("Processing document...", expanded=True) as status:
         try:
-            # 保存到临时文件
             suffix = Path(st.session_state._uploaded_filename).suffix or ".pdf"
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(st.session_state._file_bytes)
                 tmp_path = tmp.name
 
-            # RAG 构建
-            st.write("Extracting text...")
             from src.rag.engine import build_rag_from_file
-
-            st.write("Building vector index...")
-            vector_store = build_rag_from_file(
-                tmp_path, api_key=api_key
-            )
+            vector_store = build_rag_from_file(tmp_path, api_key=api_key)
 
             st.session_state.vector_store = vector_store
             st.session_state.file_processed = True
             st.session_state.processing_file = False
             st.session_state.chat_history = []
             st.session_state.doc_questions = None
-            st.session_state.doc_type = ""  # 触发文档类型识别
+            st.session_state.doc_type = ""
 
-            # 识别文档类型（取前3页文本块快速判断，失败不影响主流程）
             try:
                 from src.llm.client import LLMConfig, LLMClient
-                front_chunks = vector_store.search(
-                    "年报 半年报 季度报告 招股说明书", top_k=5, api_key=api_key
-                )
+                front_chunks = vector_store.search("年报 半年报 季度报告 招股说明书", top_k=5, api_key=api_key)
                 front_text = " ".join(r.chunk.text[:200] for r in front_chunks)[:1500]
                 if front_text.strip():
-                    doc_cfg = LLMConfig(api_key=api_key, model="qwen-turbo",
-                                       temperature=0.1, max_tokens=50)
+                    doc_cfg = LLMConfig(api_key=api_key, model="qwen-turbo", temperature=0.1, max_tokens=50)
                     doc_client = LLMClient(doc_cfg)
                     lang_hint = st.session_state.get("language", "zh")
                     if lang_hint == "zh":
@@ -656,16 +510,10 @@ if uploaded_file and not st.session_state.file_processed:
                 st.session_state.doc_type = ""
                 print(f"[DocType] skipped: {e}")
 
-            # 清理临时文件
             os.unlink(tmp_path)
-
-            status.update(
-                label=f"Done: {vector_store.chunk_count} chunks, {vector_store.table_count} tables",
-                state="complete",
-            )
+            status.update(label=f"Done: {vector_store.chunk_count} chunks, {vector_store.table_count} tables", state="complete")
 
         except Exception as exc:
-            # 避免 emoji 在错误消息中触发 latin-1 编码问题
             import traceback
             traceback.print_exc()
             try:
@@ -676,17 +524,17 @@ if uploaded_file and not st.session_state.file_processed:
             st.stop()
 
 # ============================================================================
-# 重置按钮
+# 文件就绪状态 + 重置
 # ============================================================================
 
 if st.session_state.file_processed:
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        st.success(t("file_ready", name=st.session_state.get("_uploaded_filename", ""),
-                     count=st.session_state.vector_store.chunk_count))
+        fname = st.session_state.get("_uploaded_filename", "")
+        fchunks = st.session_state.vector_store.chunk_count if st.session_state.vector_store else 0
+        st.success(t("file_ready", name=fname, count=fchunks))
     with col_b:
         if st.button(t("reset")):
-            # 只清分析状态，保留语言和 API Key 等用户偏好
             st.session_state.vector_store = None
             st.session_state.file_processed = False
             st.session_state.chat_history = []
@@ -700,216 +548,43 @@ if st.session_state.file_processed:
 # 对话区域
 # ============================================================================
 
-if st.session_state.file_processed:
+# ── 推荐提问 ──
+last = st.session_state.get("last_analysis")
+has_doc = st.session_state.file_processed and st.session_state.vector_store and not st.session_state.vector_store.is_empty
 
-    # ── 推荐提问：last_analysis 有追问就用追问，否则用初始问题 ──
-    last = st.session_state.get("last_analysis")
-    if last and last.get("followup_questions"):
-        quick_questions = last["followup_questions"]
-    elif st.session_state.get("doc_questions"):
-        quick_questions = st.session_state["doc_questions"]
-    else:
-        # 首次：基于文档生成初始推荐提问
-        if st.session_state.vector_store and api_key:
-            with st.spinner("🔍 " + ("正在分析文档，生成推荐提问..." if st.session_state.language == "zh" else "Analyzing document...")):
-                try:
-                    st.session_state.doc_questions = _generate_doc_questions(
-                        st.session_state.vector_store, api_key,
-                        st.session_state.language,
-                        st.session_state.get("_uploaded_filename", "document"),
-                    )
-                except Exception:
-                    st.session_state.doc_questions = t("quick_questions")
-        quick_questions = st.session_state.get("doc_questions") or t("quick_questions")
-
-    # 输入区
-    user_query = st.chat_input(t("chat_placeholder"))
-
-    if "pending_query" in st.session_state:
-        user_query = st.session_state.pop("pending_query")
-
-    # ── 聊天记录 ──
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # ── 推荐提问（在聊天记录下方、输入框上方）──
-    st.markdown("**" + ("📋 推荐追问:" if st.session_state.language == "zh" else "📋 Follow-up Questions:") + "**")
-    qkey = st.session_state.get("_qkey", 0)
-    cols = st.columns(len(quick_questions))
-    for i, (col, q) in enumerate(zip(cols, quick_questions)):
-        with col:
-            if st.button(q, key=f"quick_{qkey}_{i}", use_container_width=True):
-                st.session_state.pending_query = q
-                st.session_state._qkey = qkey + 1
-
-    # 处理用户提问
-    if user_query:
-        # 检查 API Key
-        if not api_key:
-            st.error(t("api_key_warning"))
-            st.stop()
-
-        # 显示用户消息
-        with st.chat_message("user"):
-            st.markdown(user_query)
-        st.session_state.chat_history.append({"role": "user", "content": user_query})
-
-        # ── 运行分析 ──
-        from src.llm.client import LLMClient, LLMConfig
-        from src.rag.engine import rewrite_query_for_rag
-
-        config = LLMConfig(
-            api_key=api_key, api_base=api_base,
-            model=model, temperature=temperature, max_tokens=max_tokens,
-        )
-        llm_client = LLMClient(config)
-
-        # ── RAG 检索文档上下文 ──
-        vs = st.session_state.vector_store
-        doc_text = ""
-        if not vs.is_empty:
+if last and last.get("followup_questions"):
+    quick_questions = last["followup_questions"]
+elif has_doc and not st.session_state.get("doc_questions"):
+    if api_key:
+        with st.spinner("🔍 " + ("正在分析文档，生成推荐提问..." if st.session_state.language == "zh" else "Analyzing document...")):
             try:
-                extra = rewrite_query_for_rag(user_query, api_key, st.session_state.language)
-            except Exception:
-                extra = []
-            rag = vs.search(user_query, top_k=5, extra_queries=extra, api_key=api_key)
-            if rag:
-                doc_text = "\n".join(
-                    f"[第{r.chunk.page}页] {r.chunk.text[:400]}" for r in rag[:4]
+                st.session_state.doc_questions = _generate_doc_questions(
+                    st.session_state.vector_store, api_key,
+                    st.session_state.language,
+                    st.session_state.get("_uploaded_filename", "document"),
                 )
-
-        doc_type_str = st.session_state.get("doc_type", "未知")
-
-        # ── 构建 prompt：文档上下文 + 用户问题 → qwen-max 自己搜索+回答 ──
-        today_str = __import__('datetime').datetime.now().strftime("%Y年%m月%d日")
-
-        if web_search_enabled:
-            prompt = f"""今天是{today_str}。
-
-## 用户上传的文档（{doc_type_str}）
-{doc_text[:3000] if doc_text else '（文档未提供或为空）'}
-
-## 用户问题
-{user_query}
-
-请联网搜索最新信息来回答。如果文档有相关数据，对比文档和网络数据。文档可能是旧的（如2025年数据），网络能搜到更新的（如2026年数据）时以网络为准。
-
-要求：
-- 直接回答问题，结构清晰
-- 有具体数据就列出来，标注来源（媒体名+日期，文档标注页码）
-- 文档和网络数据时间不同时，优先用网络最新数据
-- 简明扼要，不要写论文"""
-            search_on = True
-        else:
-            prompt = f"""## 用户上传的文档（{doc_type_str}）
-{doc_text[:3000] if doc_text else '（文档未提供或为空）'}
-
-## 用户问题
-{user_query}
-
-请基于文档内容回答。文档有就给数据+页码，没有就说未找到。简明扼要。"""
-            search_on = False
-
-        messages = [{"role": "user", "content": prompt}]
-
-        # ── 流式输出 ──
-        with st.chat_message("assistant"):
-            report_placeholder = st.empty()
-            streamed_text = []
-
-            def on_token(token: str):
-                streamed_text.append(token)
-                report_placeholder.markdown("".join(streamed_text))
-
-            try:
-                if on_token and search_on:
-                    final_report = llm_client.chat_stream(
-                        messages, on_token=on_token, model="qwen-max",
-                        enable_search=True
-                    )
-                elif search_on:
-                    final_report = llm_client.chat(
-                        messages, model="qwen-max", enable_search=True
-                    )
-                elif on_token:
-                    final_report = llm_client.chat_stream(
-                        messages, on_token=on_token, model="qwen-max"
-                    )
-                else:
-                    final_report = llm_client.chat(
-                        messages, model="qwen-max"
-                    )
-            except Exception as e:
-                final_report = f"分析出错: {e}"
-
-            result = {
-                "final_report": final_report,
-                "execution_log": [],
-                "followup_questions": [],
-            }
-
-            report = result.get("final_report", "")
-            if not report:
-                fail_msg = ("分析失败，请检查 API Key 和网络连接。"
-                           if st.session_state.language == "zh"
-                           else "Analysis failed. Please check your API Key and network connection.")
-                report = fail_msg
-                report_placeholder.markdown(report)
-
-            # 下载按钮
-            st.download_button(
-                label=t("download"),
-                data=report,
-                file_name=f"finrisk_report_{time.strftime('%Y%m%d_%H%M%S')}.md",
-                mime="text/markdown",
-            )
-
-        st.session_state.chat_history.append({"role": "assistant", "content": report})
-        st.session_state.last_analysis = result
-        st.rerun()
-
-    # ── Agent 详情 expander（独立于 user_query，基于 last_analysis 渲染）──
-    if st.session_state.get("last_analysis"):
-        result = st.session_state.last_analysis
-        with st.expander(t("detail_title"), expanded=False):
-            tab_labels = t("detail_tabs")
-            tabs = st.tabs(tab_labels)
-            sections = [
-                ("data_extraction", result.get("data_extraction", "")),
-                ("risk_assessment", result.get("risk_assessment", "")),
-                ("compliance_check", result.get("compliance_check", "")),
-                ("devils_advocate", result.get("devils_advocate", "")),
-            ]
-            for tab, (_, content) in zip(tabs[:4], sections):
-                with tab:
-                    st.markdown(content)
-            with tabs[4]:
-                for log in result.get("execution_log", []):
-                    status_icon = {"running": "⏳", "done": "✅", "error": "❌"}
-                    icon = status_icon.get(log["status"], "•")
-                    content = log.get("content", "")
-                    if content:
-                        st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
-                    else:
-                        st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
+            except Exception:
+                st.session_state.doc_questions = t("quick_questions")
+    quick_questions = st.session_state.get("doc_questions") or t("quick_questions")
+elif has_doc and st.session_state.get("doc_questions"):
+    quick_questions = st.session_state["doc_questions"]
 else:
-    # 未上传文件时显示欢迎信息
+    quick_questions = t("quick_questions")
+
+# ── 聊天记录 ──
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# ── 欢迎信息（无对话且无文档时显示）──
+if not st.session_state.chat_history and not st.session_state.file_processed:
     st.divider()
 
-    # ── 标题 ──
-    st.markdown(f'<h2 class="section-title" style="font-size:1.6rem;color:#1a3c5e">{t("welcome_title")}</h2>',
-                unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">{t("welcome_subtitle")}</p>',
-                unsafe_allow_html=True)
+    st.markdown(f'<h2 class="section-title" style="font-size:1.6rem;color:#1a3c5e">{t("welcome_title")}</h2>', unsafe_allow_html=True)
+    st.markdown(f'<p class="subtitle">{t("welcome_subtitle")}</p>', unsafe_allow_html=True)
 
-    # ── 分析流程动画 ──
-    st.markdown(f'<div class="section-title">{t("welcome_pipeline_title")}</div>',
-                unsafe_allow_html=True)
-    pipeline_steps = [
-        t("welcome_pipeline_1"), t("welcome_pipeline_2"), t("welcome_pipeline_3"),
-        t("welcome_pipeline_4"), t("welcome_pipeline_5"),
-    ]
+    st.markdown(f'<div class="section-title">{t("welcome_pipeline_title")}</div>', unsafe_allow_html=True)
+    pipeline_steps = [t("welcome_pipeline_1"), t("welcome_pipeline_2"), t("welcome_pipeline_3"), t("welcome_pipeline_4"), t("welcome_pipeline_5")]
     pipeline_html = '<div class="pipeline-container">'
     for i, step in enumerate(pipeline_steps):
         pipeline_html += f'<div class="pipeline-step">{step}</div>'
@@ -918,10 +593,8 @@ else:
     pipeline_html += '</div>'
     st.markdown(pipeline_html, unsafe_allow_html=True)
 
-    # ── Agent 卡片 ──
     agent_title = ("🤖 四个专业 Agent" if st.session_state.language == "zh" else "🤖 Four Specialist Agents")
-    st.markdown(f'<div class="section-title">{agent_title}</div>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div class="section-title">{agent_title}</div>', unsafe_allow_html=True)
     agent_cards = [
         ("📊", t("welcome_agent_data_name"), t("welcome_agent_data_desc")),
         ("⚠️", t("welcome_agent_risk_name"), t("welcome_agent_risk_desc")),
@@ -938,9 +611,7 @@ else:
     cards_html += '</div>'
     st.markdown(cards_html, unsafe_allow_html=True)
 
-    # ── 技术栈 ──
-    st.markdown(f'<div class="section-title">{t("welcome_tech_title")}</div>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div class="section-title">{t("welcome_tech_title")}</div>', unsafe_allow_html=True)
     tech_items = t("welcome_tech_items").split(" · ")
     tags_html = '<div class="tech-tags-wrap">'
     for item in tech_items:
@@ -950,3 +621,134 @@ else:
 
     st.divider()
     st.markdown(f'<p class="disclaimer">{t("disclaimer")}</p>', unsafe_allow_html=True)
+
+# ── 推荐提问按钮 ──
+st.markdown("**" + ("📋 推荐问题:" if st.session_state.language == "zh" else "📋 Suggested Questions:") + "**")
+qkey = st.session_state.get("_qkey", 0)
+cols = st.columns(len(quick_questions))
+for i, (col, q) in enumerate(zip(cols, quick_questions)):
+    with col:
+        if st.button(q, key=f"quick_{qkey}_{i}", use_container_width=True):
+            st.session_state.pending_query = q
+            st.session_state._qkey = qkey + 1
+
+# ── 输入区 ──
+user_query = st.chat_input(t("chat_placeholder"))
+
+if "pending_query" in st.session_state:
+    user_query = st.session_state.pop("pending_query")
+
+# ── 处理用户提问 ──
+if user_query:
+    if not api_key:
+        st.error(t("api_key_warning"))
+        st.stop()
+
+    with st.chat_message("user"):
+        st.markdown(user_query)
+    st.session_state.chat_history.append({"role": "user", "content": user_query})
+
+    # ── 运行分析：Coordinator 驱动的多 Agent 协作 ──
+    from src.llm.client import LLMClient, LLMConfig
+    from src.orchestrator_v2 import OrchestratorV2
+
+    config = LLMConfig(
+        api_key=api_key, api_base=api_base,
+        model=model, temperature=temperature, max_tokens=max_tokens,
+    )
+    llm_client = LLMClient(config)
+    orchestrator = OrchestratorV2(llm_client, language=st.session_state.language)
+    doc_type_str = st.session_state.get("doc_type", "")
+
+    vs = st.session_state.vector_store
+    if vs is None:
+        from src.rag.engine import VectorStore
+        vs = VectorStore()
+
+    with st.chat_message("assistant"):
+        report_placeholder = st.empty()
+        progress_placeholder = st.empty()
+        streamed_text = []
+        progress_lines = []
+
+        def on_progress(agent: str, status: str, content: str):
+            icon = {"running": "⏳", "done": "✅", "error": "❌"}.get(status, "•")
+            progress_lines.append(f"{icon} **{agent}**: {content[:150]}")
+            progress_placeholder.markdown("> " + "\n> ".join(progress_lines[-10:]))
+
+        def on_token(token: str):
+            streamed_text.append(token)
+            report_placeholder.markdown("".join(streamed_text))
+
+        try:
+            result = orchestrator.run(
+                user_query=user_query,
+                vector_store=vs,
+                api_key=api_key,
+                on_token=on_token,
+                on_progress=on_progress,
+                web_search_enabled=web_search_enabled,
+                doc_type=doc_type_str,
+                chat_history=st.session_state.get("chat_history", []),
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            result = {
+                "final_report": f"分析出错: {e}",
+                "execution_log": [],
+                "followup_questions": [],
+            }
+
+        progress_placeholder.empty()
+
+        report = result.get("final_report", "")
+        if not report:
+            fail_msg = ("分析失败，请检查 API Key 和网络连接。"
+                       if st.session_state.language == "zh"
+                       else "Analysis failed. Please check your API Key and network connection.")
+            report = fail_msg
+            report_placeholder.markdown(report)
+
+        st.download_button(
+            label=t("download"),
+            data=report,
+            file_name=f"finrisk_report_{time.strftime('%Y%m%d_%H%M%S')}.md",
+            mime="text/markdown",
+        )
+
+    st.session_state.chat_history.append({"role": "assistant", "content": report})
+    st.session_state.last_analysis = result
+    st.rerun()
+
+# ── Agent 详情 expander ──
+if st.session_state.get("last_analysis"):
+    result = st.session_state.last_analysis
+    with st.expander(t("detail_title"), expanded=False):
+        tab_labels = t("detail_tabs")
+        tabs = st.tabs(tab_labels)
+        sections = [
+            ("data_extraction", result.get("data_extraction", "")),
+            ("risk_assessment", result.get("risk_assessment", "")),
+            ("compliance_check", result.get("compliance_check", "")),
+            ("devils_advocate", result.get("devils_advocate", "")),
+        ]
+        for tab, (_, content) in zip(tabs[:4], sections):
+            with tab:
+                if content:
+                    st.markdown(content)
+                else:
+                    st.caption("（分析过程中未调用此 Agent）" if st.session_state.language == "zh" else "(This agent was not called)")
+        with tabs[4]:
+            for log in result.get("execution_log", []):
+                status_icon = {"running": "⏳", "done": "✅", "error": "❌"}
+                icon = status_icon.get(log["status"], "•")
+                content = log.get("content", "")
+                if content:
+                    st.markdown(f"{icon} **{log['agent']}**: {content[:200]}")
+                else:
+                    st.markdown(f"{icon} **{log['agent']}**: {log['status']}")
+
+# ── 底部 ──
+st.divider()
+st.markdown(f'<p class="disclaimer">{t("disclaimer")}</p>', unsafe_allow_html=True)

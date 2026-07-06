@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.llm.client import LLMClient, LLMConfig
 from src.rag.engine import build_rag_from_file, VectorStore
-from src.orchestrator import Orchestrator
+from src.orchestrator_v2 import OrchestratorV2 as Orchestrator
 
 
 # ═══════════════════════════════════════════════════════════════

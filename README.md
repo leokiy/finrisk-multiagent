@@ -19,15 +19,18 @@
 
 FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaboration）**架构的金融文档风险分析平台。
 
-上传一份金融文档，提出风险相关问题。系统内置的 **Coordinator（协调 Agent）** 自动判断问题复杂度——简单查数据自己搜索回答、专项分析调度相关专家、全面评估启动完整 Agent 编队——最后综合成结构化报告。
+上传一份金融文档（或不传，直接提问），系统内置的 **Coordinator（协调 Agent）** 自动判断问题复杂度——简单查数据自己搜索回答、专项分析调度相关专家、全面评估启动完整 Agent 编队——最后综合成结构化报告。
 
 ### 核心特色
 
 - 🧠 **Coordinator 驱动**: LLM 驱动的协调 Agent，按问题复杂度自动选择策略（ReAct 决策循环）
 - 🤖 **Agent 自主判断**: 每个 Agent 分析后声明 `[COMPLETE]`（信息足够）或 `[NEED_MORE]`（需要搜索），Coordinator 汇总决定是否继续
+- 📊 **结构化 Claim 提取与裁决**: 综合阶段不再把原始文本碎片丢给 LLM——先提取结构化 claims，算法裁决冲突（actual > forecast、官方 > 媒体、多源 > 孤立），LLM 只负责基于已验证事实写报告
 - 📎 **混合 RAG 检索**: 关键词精确匹配 + FAISS 语义检索，目录页自动降权，低质量文本自动过滤
 - 🌐 **双路联网搜索**: DDGS（拿 URL）+ DashScope enable_search（拿详实内容），并行执行
-- 📊 **RAG 评估体系**: RAG Triad 三维量化评估（Context Relevance / Faithfulness / Answer Relevance），不靠感觉调参
+- 💬 **对话上下文**: 支持追问，系统理解"那同比增长呢？"中的指代关系
+- 📄 **文档可选**: 不上传文档也能直接提问，纯靠联网搜索回答
+- 📊 **RAG 评估体系**: RAG Triad 三维量化评估（Context Relevance / Faithfulness / Answer Relevance）
 - 🔑 **用户自有 API Key**: 不内置任何密钥
 
 ---
@@ -46,10 +49,25 @@ flowchart TB
     G --> H[Agent 输出 COMPLETE/NEED_MORE]
     H -->|NEED_MORE| I[Coordinator 补搜 → 回传 Agent]
     I --> H
-    H -->|COMPLETE| E
-    F -->|否 全面评估| J[🤖 全部 Agent + 魔鬼代言人]
-    J --> H
+    H -->|COMPLETE| J[结构化 Claim 提取]
+    J --> K[算法冲突裁决]
+    K --> E
+    F -->|否 全面评估| L[🤖 全部 Agent + 魔鬼代言人]
+    L --> H
 ```
+
+### 综合阶段的数据流
+
+```
+原始文本碎片 ──→ [Claim 提取] ──→ [冲突裁决] ──→ 干净简报 ──→ LLM 写报告
+                    ↑                  ↑
+              LLM 提取 JSON      算法裁决规则:
+             {metric, value,     actual > forecast
+              source_type,       官方 > 媒体
+              source_label}      多源 > 孤立
+```
+
+不再靠 prompt 指令让 LLM "区分实际业绩和预测"，而是在数据进入 LLM 之前就结构化分离。
 
 ### Coordinator 三步策略
 
@@ -60,8 +78,6 @@ flowchart TB
 | **全面评估** | 搜 → 派多位专家并行 → 魔鬼代言人质疑 | "做个全面风险评估" |
 
 ### 四个专业 Agent
-
-每个 Agent 用专业能力**回答问题**，不是机械填充检查清单。输出末尾声明完整性：
 
 | Agent | 角色 | 工作方式 |
 |-------|------|----------|
@@ -92,19 +108,28 @@ cd finrisk-multiagent
 pip install -r requirements.txt
 ```
 
-### 3. 启动
+### 3. 配置 API Key（可选）
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入你的 DASHSCOPE_API_KEY
+```
+
+或在启动后于侧边栏输入。
+
+### 4. 启动
 
 ```bash
 python -m streamlit run app.py
 ```
 
-### 4. 使用
+### 5. 使用
 
 1. 浏览器打开 `http://localhost:8501`
 2. 左侧边栏输入 DashScope API Key
-3. 上传金融文档（PDF / TXT / MD）
-4. 勾选 🌐 联网搜索
-5. 提问——Coordinator 自动判断策略
+3. （可选）上传金融文档（PDF / TXT / MD）
+4. 提问——Coordinator 自动判断策略
+5. 支持追问，系统理解对话上下文
 
 ---
 
@@ -118,7 +143,7 @@ finrisk-multiagent/
 ├── README.md
 │
 ├── src/
-│   ├── orchestrator_v2.py      # 🧠 Coordinator（ReAct决策循环 + Agent完整性判断）
+│   ├── orchestrator_v2.py      # 🧠 Coordinator（ReAct决策循环 + Claim提取裁决）
 │   ├── agents/
 │   │   ├── base.py             # Agent 基类：混合RAG + 简报注入 + LLM调用
 │   │   ├── data_extractor.py   # 📊 数据提取 Agent
@@ -152,7 +177,7 @@ finrisk-multiagent/
 |------|------|------|
 | **前端** | Streamlit | 纯 Python Web UI |
 | **LLM** | DashScope (Qwen) / OpenAI 兼容 | turbo/plus/max |
-| **Coordinator** | ReAct 决策循环 | LLM 驱动的任务分解和调度 |
+| **Coordinator** | ReAct 决策循环 + Claim 提取裁决 | LLM 驱动的任务分解和调度 |
 | **RAG** | 关键词精确匹配 + FAISS 语义检索 | 双路融合，低质量自动过滤 |
 | **联网搜索** | DDGS + enable_search | URL + 详实内容双路并行 |
 | **文档处理** | pdfplumber + LangChain TextSplitter | PDF 文本提取 + 表格结构化 |
@@ -163,7 +188,7 @@ finrisk-multiagent/
 
 基于 **RAG Triad** 框架的量化评估：
 
-| 维度 | 衡量 | 
+| 维度 | 衡量 |
 |------|------|
 | **Context Relevance** | 检索到的文档段落对回答问题有帮助吗？ |
 | **Faithfulness** | 回答严格基于文档/搜索结果，没有编造吗？ |
@@ -184,6 +209,7 @@ python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf
 | **信用评估** | 评估债券发行人的信用风险 |
 | **合规自查** | 对照监管框架检查信息披露的完整性 |
 | **监管科技** | 辅助监管机构进行信息披露合规检查 |
+| **通用金融问答** | 不传文档，直接提问——系统联网搜索最新数据回答 |
 
 ---
 
