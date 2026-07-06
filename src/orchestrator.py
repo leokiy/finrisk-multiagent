@@ -74,18 +74,18 @@ class Orchestrator:
     def run(self, user_query: str, vector_store: VectorStore,
             api_key: str = "", on_synthesis_token=None,
             web_search_enabled: bool = False,
-            doc_type: str = "") -> dict:
-        """完整执行多 Agent 协作工作流。
+            doc_type: str = "",
+            max_iterations: int = 10) -> dict:
+        """完整执行多 Agent 协作工作流，带 refinement loop。
 
-        新架构：
-        0. 扫描文档 → 文档简报（公司名/代码/行业/报告期）
-        1. 基于简报 + 用户原始问题 → 各Agent专属搜索词
-        2. 并行执行搜索 → 搜索结果注入各Agent
-        3. Agent 拿到：用户原始问题 + 文档简报 + 自己的RAG检索 + 自己的搜索结果
-        4. 深度质疑 → 回应 → 综合报告
+        每一轮分析后自动评估结论完整性——如有"未找到"/"信息不足"，
+        生成针对性搜索词重新搜索，直到所有缺口填上或确认网络上也没有。
+
+        max_iterations: 最大循环轮次（默认 10，可调）
         """
         self.reporter.clear()
         lang = self.language
+        max_iter = max_iterations
 
         # ═══════════════════════════════════════════════════════════════
         # 第零轮：扫描文档 → 文档简报
@@ -191,26 +191,84 @@ class Orchestrator:
                         for r in rag_results[:4]
                     )
 
-            final_report = self._synthesize_factual(
-                user_query, rag_text, doc_type, on_synthesis_token,
-                web_search_enabled=web_search_enabled,
-                web_results=data_web_results,
-            )
+            # ── Refinement Loop: 评估完整性 → 有缺口就补搜 ──
+            iteration = 0
+            all_queries = set()
+            current_rag = rag_text
+            current_web = data_web_results or []
+            final_report = ""
+
+            while iteration < max_iter:
+                iteration += 1
+
+                # 综合
+                final_report = self._synthesize_factual(
+                    user_query, current_rag, doc_type, on_synthesis_token,
+                    web_search_enabled=web_search_enabled,
+                    web_results=current_web,
+                )
+
+                # 评估完整性
+                gaps = self._evaluate_completeness(final_report, user_query)
+                actionable = [g for g in gaps if "CONFIRMED_UNAVAILABLE" not in g]
+                confirmed = [g for g in gaps if "CONFIRMED_UNAVAILABLE" in g]
+
+                if not actionable:
+                    if confirmed:
+                        self.reporter.update(
+                            "Orchestrator", "done",
+                            (f"Refinement [{iteration}/{max_iter}]: {len(confirmed)}项确认网络上不存在"
+                             if lang == "zh" else
+                             f"Refinement [{iteration}/{max_iter}]: {len(confirmed)} confirmed unavailable")
+                        )
+                    break
+
+                self.reporter.update(
+                    "Orchestrator", "running",
+                    (f"Refinement [{iteration}/{max_iter}]: 发现{len(actionable)}个信息缺口，补搜中..."
+                     if lang == "zh" else
+                     f"Refinement [{iteration}/{max_iter}]: {len(actionable)} gaps, re-searching...")
+                )
+
+                # 生成缺口搜索词 → 执行搜索
+                gap_queries = self._generate_gap_search_queries(
+                    user_query, actionable, doc_brief
+                )
+                new_queries = set()
+                for k, v in gap_queries.items():
+                    new_queries.update(v)
+
+                # 去重：不重复搜索
+                new_queries -= all_queries
+                if not new_queries:
+                    break
+                all_queries.update(new_queries)
+
+                # 执行补搜
+                gap_results = self._execute_agent_searches(
+                    {"data_extractor": list(new_queries)}, api_key
+                )
+                new_web = gap_results.get("data_extractor", [])
+                if new_web:
+                    current_web = current_web + new_web
+                    self.reporter.update(
+                        "Orchestrator", "done",
+                        (f"补搜完成: {len(new_web)}条新结果"
+                         if lang == "zh" else f"Re-search: {len(new_web)} new results")
+                    )
 
             self.reporter.update("Orchestrator", "done",
-                                 "分析完成。" if lang == "zh" else "Analysis complete.")
+                                 (f"分析完成 ({iteration}轮)."
+                                  if lang == "zh" else f"Analysis complete ({iteration} rounds)."))
 
             followup = self._generate_followup_questions(
                 user_query, final_report
             )
-            self.reporter.update("Orchestrator", "done",
-                                 f"追问生成: {len(followup)}条"
-                                 if lang == "zh" else f"Followups: {len(followup)}")
 
             return {
                 "query": user_query,
                 "question_type": "factual",
-                "data_extraction": rag_text[:500],
+                "data_extraction": current_rag[:500],
                 "risk_assessment": "",
                 "compliance_check": "",
                 "devils_advocate": "",
@@ -394,6 +452,121 @@ class Orchestrator:
                 questions.append(line)
 
         return questions[:count]
+
+    # ----------------------------------------------------------------
+    # 内部 — 文档扫描
+    # ----------------------------------------------------------------
+
+    # ----------------------------------------------------------------
+    # 内部 — Refinement Loop
+    # ----------------------------------------------------------------
+
+    def _evaluate_completeness(self, report: str, user_query: str) -> list[str]:
+        """评估报告是否完整——找出未解答的信息缺口。
+
+        Returns:
+            缺口列表，每个缺口描述一个未找到/不明确的信息点。
+            空列表 = 报告完整，无需继续循环。
+            包含 "CONFIRMED_UNAVAILABLE:" 前缀 = 确认网络上也不存在。
+        """
+        lang = self.language
+        if not report or len(report) < 20:
+            return ["报告为空或过短"]
+
+        prompt = (
+            f"""你是质量审查员。检查以下报告是否完整回答了用户问题。
+
+## 用户问题
+{user_query}
+
+## 系统报告
+{report[:3000]}
+
+## 任务
+找出报告中"未找到""未披露""数据缺失""信息不足""无法获取"等表示信息缺口的地方。
+- 如果报告完整回答了一切，输出一行: COMPLETE
+- 如果有缺口，每行列出一个缺口，描述需要但未获取的信息
+- 如果某个缺口明确标注了"网络上也未找到""经搜索确认不存在"，在该行前面加 CONFIRMED_UNAVAILABLE:
+- 不要重复相同缺口"""
+            if lang == "zh" else
+            f"""You are a quality reviewer. Check if this report completely answers the user's question.
+
+## User Question
+{user_query}
+
+## Report
+{report[:3000]}
+
+## Task
+Find any missing/unclear information. If complete, output: COMPLETE
+If gaps exist, list each gap on its own line.
+If a gap is confirmed as unavailable online, prefix with CONFIRMED_UNAVAILABLE:"""
+        )
+
+        try:
+            resp = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                model="qwen-turbo", temperature=0.0, max_tokens=300,
+            )
+        except Exception:
+            return []
+
+        resp = resp.strip()
+        if "COMPLETE" in resp.upper():
+            return []
+
+        gaps = []
+        for line in resp.split("\n"):
+            line = line.strip().lstrip("- ").strip()
+            if line and len(line) > 5 and "COMPLETE" not in line.upper():
+                gaps.append(line)
+
+        return gaps[:5]
+
+    def _generate_gap_search_queries(self, user_query: str, gaps: list[str],
+                                     doc_brief: str) -> dict[str, list[str]]:
+        """为报告中的信息缺口生成针对性搜索查询。
+
+        只生成与缺口相关的查询，不重复之前的搜索。
+        """
+        lang = self.language
+        gap_text = "\n".join(f"- {g}" for g in gaps if "CONFIRMED_UNAVAILABLE" not in g)
+        actionable_gaps = [g for g in gaps if "CONFIRMED_UNAVAILABLE" not in g]
+
+        if not actionable_gaps:
+            return {}
+
+        if lang == "zh":
+            prompt = f"""用户的问题是：{user_query}
+但报告中以下信息缺失或不足：
+{gap_text}
+
+文档主体：{doc_brief}
+
+请为数据提取Agent生成2-3条搜索查询，专门填补这些信息缺口。
+每条查询10-30字，自然语言。直接输出，每行一条。"""
+        else:
+            prompt = f"""Question: {user_query}
+Missing info:
+{gap_text}
+Entity: {doc_brief}
+Generate 2-3 search queries targeting these gaps. One per line."""
+
+        try:
+            resp = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                model="qwen-turbo", temperature=0.1, max_tokens=300,
+            )
+        except Exception:
+            return {}
+
+        queries = []
+        for line in resp.strip().split("\n"):
+            q = line.strip().lstrip("- ").lstrip("0123456789. ").strip()
+            if q and len(q) > 5:
+                queries.append(q)
+
+        return {"data_extractor": queries[:3]} if queries else {}
 
     # ----------------------------------------------------------------
     # 内部 — 文档扫描
