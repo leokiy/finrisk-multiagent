@@ -125,6 +125,10 @@ If you receive "Web Search Results", they are real-time search engine content. Y
 2. **Update regulatory status**: If new regulations have been issued, note that the document's disclosure may be based on outdated rules
 3. **Verify disclosures**: Compare the company's claimed compliance status against real-world records
 
+## 🔍 Completeness Declaration
+
+End with ONE of: `[COMPLETE]` or `[NEED_MORE]` with specific search queries.
+
 ## ⚠️ Document Grounding
 
 **Your review is based solely on the retrieved document excerpts and web search results above.** If both are insufficient for a check item, mark "[Insufficient data]" rather than guessing.

@@ -1,7 +1,10 @@
 """
-🎯 Orchestrator — 多 Agent 协作的中央调度器。
+⚠️ DEPRECATED — 已被 orchestrator_v2.py 替代。
 
-工作流:
+新代码使用 OrchestratorV2（ReAct 决策循环 + Agent 自我判断完整性）。
+此文件保留供参考，app.py 不再加载。
+
+工作流（旧）:
   1. 接收用户问题 + RAG 知识库
   2. 并行启动 4 个专业 Agent (各从 RAG 中独立检索)
   3. 收集所有 Agent 的输出

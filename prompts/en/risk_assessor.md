@@ -147,9 +147,13 @@ Evaluate risk across four dimensions. For each dimension, your analysis MUST inc
 ## 🌐 Web Search Results Usage
 
 If you receive "Web Search Results", they are real-time search engine content. You MUST:
-1. **Verify your judgments**: Cross-check your risk assessment against web data — if there is newer industry data or negative news, incorporate it
-2. **Prioritize recency**: Document data may be stale. If web results show more recent events/data, prefer them and cite "Web source: URL"
-3. **Self-challenge**: Actively look for information that contradicts your analysis — if found, discuss the discrepancy
+1. **Verify your judgments**: Cross-check your risk assessment against web data
+2. **Prioritize recency**: Document data may be stale. Prefer newer web data.
+3. **Self-challenge**: Look for information that contradicts your analysis.
+
+## 🔍 Completeness Declaration
+
+End with ONE of: `[COMPLETE]` or `[NEED_MORE]` with specific search queries.
 
 ## ⚠️ Document Grounding
 
