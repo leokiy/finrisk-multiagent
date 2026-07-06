@@ -779,7 +779,7 @@ if st.session_state.file_processed:
                 streamed_text.append(token)
                 report_placeholder.markdown("".join(streamed_text))
 
-            # 执行分析（synthesis 阶段流式推送）
+            # 执行分析
             result = orchestrator.run(
                 user_query,
                 st.session_state.vector_store,

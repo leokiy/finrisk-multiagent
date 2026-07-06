@@ -553,8 +553,9 @@ class OrchestratorV2:
         ]
 
         if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
-        return self.llm.chat(messages, model="qwen-max")
+            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max",
+                                       enable_search=True)
+        return self.llm.chat(messages, model="qwen-max", enable_search=True)
 
     # ------------------------------------------------------------
     # 工具
