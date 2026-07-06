@@ -9,6 +9,8 @@ FinRisk MultiAgent — 多 Agent 协作金融风险智能分析系统
 
 import os
 import sys
+import re
+import html
 import time
 import tempfile
 from pathlib import Path
@@ -16,6 +18,40 @@ from pathlib import Path
 # 加载 .env 文件中的环境变量
 from dotenv import load_dotenv
 load_dotenv()
+
+# ── 安全工具 ──
+
+def sanitize_html(text: str) -> str:
+    """对 LLM 输出做 HTML 转义，防止 XSS 注入。"""
+    return html.escape(text, quote=True)
+
+def sanitize_api_key(key: str) -> str:
+    """脱敏 API Key，仅显示前 6 位 + 后 4 位。"""
+    key = (key or "").strip()
+    if len(key) <= 10:
+        return "***"
+    return key[:6] + "****" + key[-4:]
+
+def validate_file_upload(uploaded_file, max_size_mb: int = 20) -> str | None:
+    """校验上传文件。返回错误消息字符串，通过返回 None。"""
+    if uploaded_file is None:
+        return None
+    # 大小校验
+    size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+    if size_mb > max_size_mb:
+        return f"文件过大（{size_mb:.1f}MB），上限 {max_size_mb}MB。"
+    # 扩展名校验
+    allowed_exts = {'.pdf', '.txt', '.md'}
+    ext = Path(uploaded_file.name).suffix.lower()
+    if ext not in allowed_exts:
+        return f"不支持的文件格式 {ext}，仅支持 PDF/TXT/MD。"
+    # MIME 类型校验
+    import mimetypes
+    mime, _ = mimetypes.guess_type(uploaded_file.name)
+    allowed_mimes = {'application/pdf', 'text/plain', 'text/markdown', 'text/x-markdown', None}
+    if mime and mime not in allowed_mimes:
+        return f"不支持的文件类型 {mime}。"
+    return None
 
 # 确保项目根目录在 sys.path 中
 ROOT = Path(__file__).resolve().parent
@@ -460,11 +496,10 @@ with col_info:
 # ============================================================================
 
 if uploaded_file and not st.session_state.file_processed:
-    file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-    if file_size_mb > 20:
-        st.error(("文件过大（{:.1f}MB），请上传小于20MB的文件。"
-                 if st.session_state.language == "zh"
-                 else "File too large ({:.1f}MB). Please upload files under 20MB.").format(file_size_mb))
+    # 安全校验
+    validation_error = validate_file_upload(uploaded_file)
+    if validation_error:
+        st.error(validation_error)
         st.stop()
 
     if not api_key:
@@ -491,23 +526,29 @@ if uploaded_file and not st.session_state.file_processed:
             st.session_state.chat_history = []
             st.session_state.doc_questions = None
             st.session_state.doc_type = ""
+            st.session_state.doc_company = ""
 
             try:
                 from src.llm.client import LLMConfig, LLMClient
-                front_chunks = vector_store.search("年报 半年报 季度报告 招股说明书", top_k=5, api_key=api_key)
+                front_chunks = vector_store.search("年报 半年报 季度报告 招股说明书 公司 股份", top_k=5, api_key=api_key)
                 front_text = " ".join(r.chunk.text[:200] for r in front_chunks)[:1500]
                 if front_text.strip():
-                    doc_cfg = LLMConfig(api_key=api_key, model="qwen-turbo", temperature=0.1, max_tokens=50)
+                    doc_cfg = LLMConfig(api_key=api_key, model="qwen-turbo", temperature=0.1, max_tokens=80)
                     doc_client = LLMClient(doc_cfg)
                     lang_hint = st.session_state.get("language", "zh")
                     if lang_hint == "zh":
-                        doc_prompt = f"判断文档类型（年报/半年报/季报/招股说明书/债券募集说明书/其他）。只输出类型名称：\n{front_text}"
+                        doc_prompt = f"输出两行：第一行=文档类型（年报/半年报/季报/招股书/其他），第二行=公司全称。只输出这两行，不要其他内容：\n{front_text}"
                     else:
-                        doc_prompt = f"Identify document type (Annual Report/Semi-annual/Quarterly/Prospectus/Bond/Other). Output type only:\n{front_text}"
+                        doc_prompt = f"Output two lines: line1=document type, line2=company full name. Only these two lines:\n{front_text}"
                     doc_resp = doc_client.chat([{"role": "user", "content": doc_prompt}])
-                    st.session_state.doc_type = doc_resp.strip()
+                    lines = [l.strip() for l in doc_resp.strip().split("\n") if l.strip()]
+                    if len(lines) >= 1:
+                        st.session_state.doc_type = lines[0]
+                    if len(lines) >= 2:
+                        st.session_state.doc_company = lines[1]
             except Exception as e:
                 st.session_state.doc_type = ""
+                st.session_state.doc_company = ""
                 print(f"[DocType] skipped: {e}")
 
             os.unlink(tmp_path)
@@ -659,6 +700,7 @@ if user_query:
     llm_client = LLMClient(config)
     orchestrator = OrchestratorV2(llm_client, language=st.session_state.language)
     doc_type_str = st.session_state.get("doc_type", "")
+    doc_company_str = st.session_state.get("doc_company", "")
 
     vs = st.session_state.vector_store
     if vs is None:
@@ -689,6 +731,7 @@ if user_query:
                 on_progress=on_progress,
                 web_search_enabled=web_search_enabled,
                 doc_type=doc_type_str,
+                doc_company=doc_company_str,
                 chat_history=st.session_state.get("chat_history", []),
             )
         except Exception as e:

@@ -30,113 +30,89 @@ from src.agents.devils_advocate import DevilsAdvocateAgent
 # 协调 Agent 的 System Prompt
 # ═══════════════════════════════════════════════════════════════
 
-COORDINATOR_PROMPT_ZH = """# 🎯 你是金融文档分析系统的总协调人
+COORDINATOR_PROMPT_ZH = """# 你是金融分析团队的 Coordinator
 
-你像一个投资决策委员会的主席，手下有 4 个专业分析师和一个资料室。
+## 你的团队
 
-## 你的工具箱
+4 个专家。每人有明确的输入契约和输出契约。见下表：
 
-你可以调用以下工具完成任务。不是每次都要全用——根据问题按需选择：
+| 成员 | 输入 | 产出 | 触发 |
+|------|------|------|------|
+| data_extractor | 搜索文本 + 聚焦指令 | `{status, data: [{metric, value, source_type, source}]}` | 需要提取数字时 |
+| risk_assessor | 数据提取员 JSON + 搜索补充 | `{status, findings: [{dimension, fact, judgment, risk_level, evidence}]}` | 需要风险判断时 |
+| compliance_checker | 数据提取员 JSON + 搜索补充 | `{status, findings: [{area, finding, verdict, evidence}]}` | 涉及合规时 |
+| devils_advocate | 另外三人完整 JSON | `{status, challenges: [{target, target_conclusion, challenge, severity, evidence}]}` | 另外三人完成后，需要质疑时 |
 
-### search_document(query)
-在用户上传的 PDF 文档中搜索相关内容。返回最相关的段落。
-什么时候用：问题可能在文档中有答案时。用精准关键词搜索。
+## 你的职责
 
-### search_web(query)
-联网搜索最新信息。返回网页结果（标题+链接+摘要）。
-什么时候用：文档里没有的信息、需要验证的数据、行业对比、最新动态。
+1. 判断问题类型 → 选策略
+2. 写清晰的派发指令（用户问什么 + 已知什么 + 聚焦什么）
+3. 审查 Agent 返回的 JSON：COMPLETE 真的够了吗？不同 Agent 结论有矛盾吗？
+4. 维护任务账本：谁被派了 → 回没回来 → 结论是什么
+5. 决定何时信息足够，结束循环
 
-### run_analyst(analyst_name, instruction)
-派指定分析师去完成任务。可用的分析师：
-- "data_extractor": 从文档和搜索结果中提取具体数据。适合查数字、指标。
-- "risk_assessor": 从市场/信用/流动/治理四维度评估风险。适合分析类问题。
-- "compliance_checker": 对照法规框架审查合规问题。适合合规类问题。
-- "devils_advocate": 挑战已有结论、寻找盲点和矛盾。适合需要质疑时。
+## 你的工具
 
-每个 analyst 需要一句明确的 instruction——告诉它具体做什么、关注什么。
-可以一次派多个 analyst（它们会并行工作）。
+- search_document(query) — 搜上传的 PDF。用关键词。
+- search_web(query) — AI 联网搜索。用自然语言问题。不要用 site: 语法。
+- run_analyst(analyst, instruction, context) — 派专家。instruction 按"用户问X。已掌握Y。聚焦Z。"格式写。
 
-### synthesize()
-当你认为已经收集了足够的信息来回答用户的问题时，调用此工具。你会输出最终的综合报告。
+## 决策流程
 
----
+### 问题类型 → 策略
 
-## 工作方式
+**事实查询**（"...是多少""...什么时候"）→ search_web → 搜到就结束。不派专家。
+**分析判断**（"怎么样""是否合理""有什么风险"）→ search_web → data_extractor → risk_assessor/compliance_checker → devils_advocate
+**全面评估**（"全面""综合"）→ search_web → data_extractor → risk_assessor + compliance_checker 并行 → devils_advocate
+**文档分析**（用户上传了文档且针对文档内容）→ search_document 优先 → search_web 仅补充 → 文档数据 vs 网络数据冲突时以文档为准，不把网络预测当实际数据
 
-对每个用户问题，按以下循环工作：
+### 任务账本
 
-1. **Think（思考）**: 用户到底想知道什么？要回答它，我需要哪些信息？
-2. **Act（行动）**: 选择合适的工具，告诉它具体做什么
-3. **Observe（观察）**: 看返回的结果——信息够了吗？还缺什么？
-4. **Repeat or Synthesize**: 如果够了 → synthesize。不够 → 回到 Think
+每轮派 Agent 后，在心里记录：
+- 本轮委托：派了谁，查什么
+- 返回状态：COMPLETE or NEED_MORE
+- 结论摘要：关键发现（1-2 句话）
 
-## 你的角色——不仅仅是调度员
+下一轮决策时参考账本：已查到什么、还缺什么、谁还需要被派。
 
-你是协调者，不是传话筒。你的职责：
-1. **审阅专家输出**——专家说了什么？有矛盾吗？缺什么？
-2. **指导专家**——告诉专家"你上次忽略了X，这次重点关注X"或"你的结论和网络数据矛盾，重新评估"
-3. **按需搜索**——专家说需要什么就搜什么，不要替专家猜
-4. **判断时机**——信息够了就综合，不够就继续
+### 上下文预算
 
-## 行动原则——按问题复杂度选择策略
+给 Agent 的 context 只传摘要（≤500 字），不传全文。Agent 的 JSON 输出只取关键字段给下一个 Agent，不整段复制。
 
-**第一轮必须先判断问题类型，选对策略：**
+### 回退链
 
-### 简单查询（查数字、查事实）
-用户问"X是多少""X什么时候"等具体数据。
-→ **你自己搜+答就行，不要派专家。**
-Round 1: search_document + search_web
-Round 2: 信息够了就 need_more: false
+搜索无结果 → 换关键词重试一次 → 仍无结果 → 向用户说明"该方向未找到信息"，继续其他方向。
+Agent 返回 NEED_MORE → 补搜 → 重新派同一 Agent（最多 2 次）→ 仍 NEED_MORE → 以已有信息继续。
 
-### 专项分析（分析某方面、评估风险、判断合理性）
-用户问"怎么样""为什么""是否合理""有什么风险"。
-→ **先搜文档和网络，再根据需要派专家。**
-Round 1: search_document + search_web
-Round 2: 看搜索结果——数据够就直接答，不够才 run_analyst
-后续: 专家输出有 [NEED_MORE] 就补搜→回传→再判断
+## JSON 决策格式
 
-### 全面评估（用户明确要求"全面""综合""完整"评估）
-→ **可以派多个专家并行，配合魔鬼代言人。**
-但也不要一开始就把4个都派出去。先搜→再决定派谁。
-
-**通用原则：**
-- 永远不要第一轮就 run_analyst。先自己搜了再说。
-- 能自己搜到答案的就不要派专家。
-- 每次行动前想清楚：我为什么要做这一步？
-- 每轮用简体中文输出 JSON 格式的决策。
-
----
-
-## 输出格式
-
-每轮只输出一个 JSON 对象，不要额外文字：
+每轮一个 JSON:
 
 ```json
 {
-  "thought": "我对问题的理解和当前思考",
-  "plan": "我打算做什么、为什么",
+  "thought": "当前理解和进展（含任务账本摘要）",
+  "plan": "下一步做什么，为什么",
   "actions": [
-    {"tool": "search_document", "query": "..."},
-    {"tool": "search_web", "query": "..."},
-    {"tool": "run_analyst", "analyst": "data_extractor", "instruction": "..."}
+    {"tool": "search_web", "query": "自然语言搜索"},
+    {"tool": "run_analyst", "analyst": "data_extractor", "instruction": "用户问XX。已掌握：YY。聚焦ZZ。", "context": "关键发现摘要"}
   ],
   "need_more": true
 }
 ```
 
-当信息足够时：
+信息足够时:
 ```json
-{
-  "thought": "已收集足够信息",
-  "need_more": false
-}
+{"thought": "信息足够，无矛盾", "need_more": false}
 ```
 
-**规则：**
-- actions 可以包含多个工具，它们会并行执行
-- 先 search_document/search_web，拿到结果后再决定是否需要 run_analyst
-- 不要重复执行相同或相似的查询
-- need_more: false 表示可以进入 synthesize 阶段"""
+## 铁律
+
+1. 事实查询搜到就答，不派专家
+2. devils_advocate 最后派，给三人完整输出
+3. 指令按"用户问X。已掌握Y。聚焦Z。"格式
+4. Agent NEED_MORE → 补搜 → 重派（最多 2 次）
+5. 搜索无结果 → 换词重试一次 → 仍无 → 说明未找到，继续
+6. need_more: false = 确认信息足够 + 无未解决矛盾"""
 
 COORDINATOR_PROMPT_EN = """# 🎯 You are the Chief Coordinator of a financial document analysis system.
 
@@ -201,6 +177,23 @@ def _format_web_for_agent(web_items: list[dict]) -> list | None:
     return out if out else None
 
 
+def _summarize_agent_output(parsed: dict | None, raw: str) -> str:
+    """生成 Agent 输出的可读摘要，用于日志。"""
+    if not parsed:
+        return raw[:200]
+    status = parsed.get("status", "?")
+    if "data" in parsed:
+        metrics = [d.get("metric", "?") for d in parsed["data"][:5]]
+        return f"[{status}] 提取: {', '.join(metrics)}"
+    if "findings" in parsed:
+        items = [f.get("dimension", f.get("area", "?")) for f in parsed["findings"][:5]]
+        return f"[{status}] 发现: {', '.join(items)}"
+    if "challenges" in parsed:
+        sevs = [c.get("severity", "?") for c in parsed["challenges"][:5]]
+        return f"[{status}] 质疑: {len(parsed['challenges'])}条 ({', '.join(sevs)})"
+    return raw[:200]
+
+
 # ═══════════════════════════════════════════════════════════════
 # Orchestrator V2
 # ═══════════════════════════════════════════════════════════════
@@ -232,7 +225,8 @@ class OrchestratorV2:
             api_key: str = "", on_token=None,
             web_search_enabled: bool = True,
             doc_type: str = "",
-            max_rounds: int = 8,
+            doc_company: str = "",
+            max_rounds: int = 5,
             on_progress=None,
             chat_history: list[dict] | None = None) -> dict:
         """ReAct 决策循环。
@@ -242,13 +236,29 @@ class OrchestratorV2:
         """
         self._reporter_logs = []
         self._on_progress = on_progress
-        # 保存供 _synthesize 使用
         self._chat_context = chat_history
         if api_key:
             import dashscope
-            dashscope.api_key = api_key
+            # 清理 API key 中的不可见字符（避免 latin-1 编码错误）
+            clean_key = api_key.strip().encode('ascii', errors='ignore').decode('ascii')
+            dashscope.api_key = clean_key
 
         lang = self.language
+
+        # ── 快速通道：简单查数据 → 直接 qwen-max + enable_search，不走编排器 ──
+        if self._is_simple_lookup(user_query):
+            self._log("Coordinator", "running",
+                      "Fast path: direct search" if lang == "en" else "简单查询，直接搜索回答")
+            answer = self._fast_answer(user_query, vector_store, api_key, on_token, web_search_enabled, doc_company)
+            self._log("Coordinator", "done",
+                      "Done" if lang == "en" else "完成")
+            return {
+                "query": user_query,
+                "final_report": answer,
+                "followup_questions": [],
+                "execution_log": self._reporter_logs,
+                "rounds": 0,
+            }
 
         # ── 对话历史上下文 ──
         from datetime import datetime
@@ -276,8 +286,18 @@ class OrchestratorV2:
         )
 
         # 注入对话上下文，让 Coordinator 理解追问的指代
+        doc_info = f"用户上传了一份金融文档（{doc_type or '未知类型'}"
+        if doc_company:
+            doc_info += f"，公司：{doc_company}"
+        doc_info += "）。"
+        if doc_company:
+            doc_info += ("\n文档是关于该公司的。所有 search_web 查询必须包含公司名，"
+                        "不要搜到其他公司的数据。"
+                        if lang == "zh" else
+                        "\nDocument is about this company. ALL search_web queries MUST include the company name.")
+
         user_msg = (
-            f"用户上传了一份金融文档（{doc_type or '未知类型'}）。\n\n"
+            f"{doc_info}\n\n"
             + (f"## 之前的对话\n{history_context}\n\n" if history_context else "")
             + f"## 当前问题\n{user_query}\n\n"
             + ("如果当前问题是追问（如'那…呢？''同比呢？'），请结合之前的对话理解指代。"
@@ -296,6 +316,7 @@ class OrchestratorV2:
 
         # ── 累积的所有发现 ──
         all_findings: list[str] = []
+        structured_findings: list[dict] = []  # Agent 的结构化 JSON 输出
         searched_queries: set[str] = set()
         accumulated_web: list[dict] = []  # 跨轮累积的网络搜索结果
 
@@ -309,8 +330,21 @@ class OrchestratorV2:
 
             if decision is None:
                 self._log("Coordinator", "error",
-                          "Decision parse failed" if lang == "en" else "决策解析失败")
-                break
+                          "Decision parse failed, retrying" if lang == "en" else "决策解析失败，尝试恢复")
+                # 第一次恢复：提醒输出纯 JSON
+                conversation.append({
+                    "role": "user",
+                    "content": ("上一轮输出不是有效 JSON。请只输出一行 JSON，不要任何解释。"
+                               '格式: {"thought":"...","plan":"...","actions":[],"need_more":true}')
+                    if lang == "zh" else
+                    "Last output was not valid JSON. Output ONLY one line of JSON."
+                })
+                decision = self._think(conversation)
+                if decision is None:
+                    self._log("Coordinator", "error",
+                              "Retry failed, forcing synthesis" if lang == "en" else "二次恢复失败，强制综合")
+                    # 不再 break——用已收集的信息直接综合
+                    decision = {"thought": "JSON解析失败，基于已收集信息综合", "need_more": False}
 
             self._log("Coordinator", "done",
                       decision.get("thought", "")[:150])
@@ -323,6 +357,14 @@ class OrchestratorV2:
                     web_search_enabled, searched_queries, accumulated_web,
                     all_findings
                 )
+                # 收集 Agent 的结构化输出
+                for items in results.values():
+                    for item in items:
+                        if item.get("type") == "analyst_output" and item.get("parsed"):
+                            structured_findings.append({
+                                "analyst": item["analyst"],
+                                **item["parsed"]
+                            })
                 observation = self._format_observations(results, lang)
                 all_findings.append(observation)
                 conversation.append({
@@ -352,7 +394,7 @@ class OrchestratorV2:
 
         final_report = self._synthesize(
             user_query, all_findings, vector_store, api_key, on_token,
-            accumulated_web
+            accumulated_web, structured_findings
         )
 
         self._log("Coordinator", "done",
@@ -381,7 +423,7 @@ class OrchestratorV2:
                 conversation,
                 model="qwen-plus",
                 temperature=0.2,
-                max_tokens=800,
+                max_tokens=1200,
             )
         except Exception as e:
             self._log("Coordinator", "error", f"Think failed: {e}")
@@ -390,14 +432,18 @@ class OrchestratorV2:
         return self._parse_json(resp)
 
     def _parse_json(self, text: str) -> dict | None:
-        """从 LLM 回复中提取 JSON。"""
+        """从 LLM 回复中提取 JSON。增强了容错。"""
+        import re
         text = text.strip()
-        # 去掉可能的 markdown 代码块
+        # 去掉 markdown 代码块
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:]) if len(lines) > 1 else text
             if text.endswith("```"):
                 text = text[:-3]
+        # 去掉代码块后的残余标记
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
 
         # 找 JSON 边界
         start = text.find("{")
@@ -406,7 +452,13 @@ class OrchestratorV2:
             try:
                 return json.loads(text[start:end + 1])
             except json.JSONDecodeError:
-                pass
+                # 尝试修复常见问题：尾部多余逗号
+                try:
+                    fixed = re.sub(r',\s*}', '}', text[start:end + 1])
+                    fixed = re.sub(r',\s*]', ']', fixed)
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
         return None
 
     # ------------------------------------------------------------
@@ -451,15 +503,20 @@ class OrchestratorV2:
                     name = action.get("analyst", "data_extractor")
                     instr = action.get("instruction", user_query)
                     key = f"analyst:{name}"
-                    # 把累积的网络搜索结果 + 之前所有发现传给 Agent
+                    # 把累积的网络搜索结果传给 Agent
                     web_for_agent = _format_web_for_agent(accumulated_web)
-                    # 构建 Context：之前发现了什么、还需要关注什么
+                    # Coordinator 填写的 context 字段：团队已发现的关键信息
                     ctx = action.get("context", "") or ""
                     if not ctx and len(all_findings) > 0:
-                        ctx = "此前分析中已收集的信息：\n" + "\n".join(all_findings[-3:])[:2000]
+                        ctx = "\n".join(all_findings[-3:])[:2000]
+                    # 结构化组装：任务 + 团队背景
                     full_instr = instr
                     if ctx:
-                        full_instr = f"{instr}\n\n## 参考背景（此前分析中发现的信息）\n{ctx}"
+                        full_instr = f"""## 你的任务
+{instr}
+
+## 团队已掌握的信息
+{ctx}"""
                     agent_result = self._run_analyst(
                         name, full_instr, vector_store, api_key, web_for_agent
                     )
@@ -501,44 +558,45 @@ class OrchestratorV2:
             return [{"type": "error", "text": str(e)}]
 
     def _search_web(self, query: str, api_key: str) -> list[dict]:
-        """联网搜索。"""
-        from src.search.web_search import search_web, WebResult
-        try:
-            results = search_web(query, api_key=api_key, max_results=3,
-                                language=self.language)
-            out = []
-            for r in results:
-                out.append({
-                    "type": "web_result",
-                    "title": r.title[:120],
-                    "url": r.url[:300] if r.url else "",
-                    "snippet": r.snippet[:500],
-                })
+        """联网搜索。enable_search 为主（国内可用），DDGS 为辅（挂了就跳过）。"""
+        import concurrent.futures
+        out = []
 
-            # 也跑 enable_search 获取更详实的内容
-            from src.llm.client import LLMConfig
-            prompt = f"搜索以下内容，返回具体数据：{query}"
-            config = LLMConfig(api_key=api_key, model="qwen-plus",
-                              temperature=0.1, max_tokens=1000)
-            client = LLMClient(config)
-            resp = client.chat([{"role": "user", "content": prompt}],
-                              enable_search=True)
-            if resp and len(resp.strip()) > 20:
-                out.append({
-                    "type": "ai_search",
-                    "title": f"AI搜索: {query[:60]}",
-                    "url": "",
-                    "snippet": resp.strip()[:800],
-                })
+        # ── 主搜索：enable_search（DashScope，国内直连）──
+        def _do_enable_search():
+            try:
+                from src.llm.client import LLMConfig
+                prompt = f"搜索以下内容，返回具体数据和来源：{query}"
+                cfg = LLMConfig(api_key=api_key, model="qwen-turbo",
+                              temperature=0.1, max_tokens=1200)
+                client = LLMClient(cfg)
+                resp = client.chat([{"role": "user", "content": prompt}],
+                                  enable_search=True)
+                if resp and len(resp.strip()) > 20:
+                    return [{
+                        "type": "ai_search",
+                        "title": f"AI搜索: {query[:60]}",
+                        "url": "",
+                        "snippet": resp.strip()[:1000],
+                    }]
+            except Exception:
+                pass
+            return []
 
-            return out if out else [{"type": "empty", "text": "搜索无结果"}]
-        except Exception as e:
-            return [{"type": "error", "text": str(e)}]
+        # 只跑 enable_search（DDGS 在国内网络环境不可用）
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future_enable = pool.submit(_do_enable_search)
+            try:
+                out.extend(future_enable.result(timeout=30))
+            except Exception:
+                pass
+
+        return out if out else [{"type": "empty", "text": "搜索无结果"}]
 
     def _run_analyst(self, name: str, instruction: str,
                      vector_store: VectorStore, api_key: str,
                      web_results: list | None = None) -> dict:
-        """运行指定分析师，传入累积的网络搜索结果。"""
+        """运行指定分析师，解析其 JSON 输出。"""
         agents = {
             "data_extractor": self.data_extractor,
             "risk_assessor": self.risk_assessor,
@@ -549,18 +607,23 @@ class OrchestratorV2:
         if not agent:
             return {"type": "error", "text": f"未知分析师: {name}"}
 
-        # 把累积的网络搜索结果传给 Agent
         result = agent.run(instruction, vector_store, api_key=api_key,
                           web_search_results=web_results)
+        raw = result.content[:3000] if result.success else result.error
+
+        # 尝试解析 Agent 的 JSON 输出
+        parsed = self._parse_agent_output(raw, name)
+
         self._log(agent.name,
                   "done" if result.success else "error",
-                  result.content[:200] if result.success else result.error)
+                  _summarize_agent_output(parsed, raw))
 
         return {
             "type": "analyst_output",
             "analyst": name,
             "success": result.success,
-            "content": result.content[:3000] if result.success else result.error,
+            "content": raw,
+            "parsed": parsed,  # 结构化数据，供 Coordinator 和 synthesis 使用
         }
 
     # ------------------------------------------------------------
@@ -625,29 +688,137 @@ class OrchestratorV2:
     def _synthesize(self, user_query: str, findings: list[str],
                     vector_store: VectorStore, api_key: str,
                     on_token=None,
-                    accumulated_web: list[dict] | None = None) -> str:
+                    accumulated_web: list[dict] | None = None,
+                    structured_findings: list[dict] | None = None) -> str:
         """综合所有发现，生成最终报告。
 
-        架构原则：不让 LLM 做数据取证。
-        1. 从所有原始数据中提取结构化 claims
-        2. 算法裁决冲突（实际 > 预测、官方 > 媒体、多源 > 孤立）
-        3. 构建干净简报给 LLM —— LLM 只负责写报告，不负责判断哪个数字对
+        优先使用 Agent 已产出的结构化 JSON。仅当无 Agent 输出时回退到 claim 提取管道。
         """
         lang = self.language
 
         # 1) 最终文档检索
         final_doc = ""
         if not vector_store.is_empty:
-            results = vector_store.search(user_query, top_k=3, api_key=api_key)
-            if results:
-                final_doc = "\n".join(
-                    f"[p{r.chunk.page}] {r.chunk.text[:300]}" for r in results[:3]
-                )
+            try:
+                results = vector_store.search(user_query, top_k=3, api_key=api_key)
+                if results:
+                    final_doc = "\n".join(
+                        f"[p{r.chunk.page}] {r.chunk.text[:300]}" for r in results[:3]
+                    )
+            except Exception as e:
+                self._log("Coordinator", "warning", f"Final doc search failed: {e}")
 
-        # 2) 收集所有原始数据文本
+        # 2) 选择路径：有 Agent 结构化数据 → 直接用；无 → claim 提取管道
+        if structured_findings:
+            brief = self._build_brief_from_structured(
+                user_query, structured_findings, final_doc, findings, lang
+            )
+        else:
+            brief = self._build_brief_from_raw(
+                user_query, accumulated_web, findings, vector_store, api_key, lang, final_doc
+            )
+
+        # 3) LLM 写报告
+        messages = [
+            {"role": "system", "content": self.synthesis_prompt},
+            {"role": "user", "content": brief},
+        ]
+
+        try:
+            if on_token:
+                return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
+            return self.llm.chat(messages, model="qwen-max")
+        except Exception as e:
+            self._log("Coordinator", "error",
+                      f"Synthesis LLM failed: {e}" if lang == "en" else f"综合报告生成失败: {e}")
+            return ("报告生成失败，请稍后重试。分析数据已收集。"
+                    if lang == "zh" else "Report generation failed. Analysis data collected.")
+
+    # ------------------------------------------------------------
+    # 简报构建（两条路径）
+    # ------------------------------------------------------------
+
+    def _build_brief_from_structured(
+        self, user_query: str, structured: list[dict],
+        doc_text: str, findings: list[str], lang: str
+    ) -> str:
+        """路径 A：直接用 Agent JSON 输出构建简报。"""
+        zh = lang == "zh"
+        parts = []
+        parts.append(f"## {'用户问题' if zh else 'User Question'}\n{user_query}\n")
+
+        # 对话上下文
+        chat = self._chat_context
+        if chat and len(chat) > 1:
+            parts.append(f"## {'对话上下文' if zh else 'Conversation Context'}")
+            for msg in chat[-6:]:
+                role = "用户" if msg["role"] == "user" else "系统"
+                parts.append(f"- **{role}**: {msg['content'][:200]}")
+            parts.append("")
+
+        # Agent 结构化输出 → 事实表
+        parts.append(f"## {'团队分析结果（唯一数据来源）' if zh else 'Team Analysis (sole data source)'}")
+        for s in structured:
+            aname = s.get("analyst", "?")
+            if "data" in s:
+                parts.append(f"### {aname}")
+                parts.append("| 指标 | 数值 | 类型 | 来源 |")
+                parts.append("|------|------|------|------|")
+                for d in s["data"]:
+                    parts.append(f"| {d.get('metric','?')} | {d.get('value','?')} | {d.get('source_type','?')} | {d.get('source','?')} |")
+                parts.append("")
+            if "findings" in s:
+                parts.append(f"### {aname}")
+                for f in s["findings"]:
+                    dim = f.get("dimension", f.get("area", "?"))
+                    verdict = f.get("risk_level", f.get("verdict", ""))
+                    parts.append(f"- **{dim}** [{verdict}]: {f.get('judgment', f.get('finding','?'))} (证据: {f.get('evidence','?')})")
+                parts.append("")
+            if "challenges" in s:
+                parts.append(f"### {aname}")
+                for c in s["challenges"]:
+                    parts.append(f"- [{c.get('severity','?')}] **{c.get('target','?')}**: {c.get('challenge','?')}")
+                parts.append("")
+        parts.append("")
+
+        # 文档上下文
+        if doc_text.strip():
+            parts.append(f"## {'文档关键段落' if zh else 'Document Context'}")
+            parts.append(doc_text)
+            parts.append("")
+
+        # 分析日志摘要
+        brief_log = "\n---\n".join(findings[-3:])[:1500]
+        if brief_log.strip():
+            parts.append(f"## {'分析过程摘要' if zh else 'Analysis Log Summary'}")
+            parts.append(brief_log)
+            parts.append("")
+
+        # 输出指令
+        parts.append("---")
+        parts.append(
+            "## 输出要求\n\n"
+            "1. 上面「团队分析结果」是你唯一允许使用的数据来源。**禁止使用表中没有的数字。**\n"
+            "2. 第一句直接给答案。结构跟问题走，不用模板。\n"
+            "3. 标注来源用表中的 Source 列。\n"
+            "4. 不同 Agent 结论有矛盾时必须指出并裁决。"
+            if zh else
+            "## Instructions\n\n"
+            "1. ONLY use data from the Team Analysis table. No external numbers.\n"
+            "2. Lead with answer. No templates.\n"
+            "3. Cite sources. Resolve contradictions explicitly."
+        )
+        return "\n".join(parts)
+
+    def _build_brief_from_raw(
+        self, user_query: str, accumulated_web: list[dict] | None,
+        findings: list[str], vector_store: VectorStore, api_key: str,
+        lang: str, doc_text: str
+    ) -> str:
+        """路径 B：无 Agent 输出时的回退——claim 提取管道。"""
         all_raw_text = self._collect_raw_data(accumulated_web, findings)
 
-        # 3) 最终交叉验证搜索
+        # 最终交叉验证搜索
         fresh_text = ""
         try:
             fresh_web = self._search_web(user_query, api_key)
@@ -656,23 +827,23 @@ class OrchestratorV2:
                     f"[{w.get('title','')}] {w.get('snippet','')[:500]}"
                     for w in fresh_web[:3]
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            self._log("Coordinator", "warning", f"Fresh search failed: {e}")
 
-        # 4) 结构化 claim 提取（一次 LLM 调用，把原始文本转为结构化事实表）
         claims = self._extract_claims(all_raw_text, fresh_text, user_query, api_key)
+        if not claims and all_raw_text:
+            claims = self._fallback_extract(all_raw_text)
 
-        # 5) 冲突裁决（确定性规则，不靠 LLM）
-        resolved, conflicts = self._resolve_claims(claims)
+        try:
+            resolved, conflicts = self._resolve_claims(claims)
+        except Exception as e:
+            self._log("Coordinator", "warning", f"Claim resolution failed: {e}")
+            resolved, conflicts = claims, []
 
-        # 6) 如果存在无法裁决的冲突，做针对性搜索
         arbitration = ""
         if conflicts:
             arb_query = self._build_arbitration_query(conflicts, user_query)
             if arb_query:
-                self._log("Coordinator", "running",
-                          f"Unresolved conflicts, arbitrating: {arb_query[:80]}"
-                          if lang == "en" else f"存在未裁决的数据矛盾，针对性搜索: {arb_query[:80]}")
                 try:
                     arb_results = self._search_web(arb_query, api_key)
                     if arb_results:
@@ -680,27 +851,15 @@ class OrchestratorV2:
                             f"[{w.get('title','')}] {w.get('snippet','')[:500]}"
                             for w in arb_results[:3]
                         )
-                        # 从裁决搜索中再次提取 claims 并重新裁决
                         arb_claims = self._extract_claims(arb_text, "", user_query, api_key)
                         resolved, conflicts = self._resolve_claims(claims + arb_claims)
                         arbitration = arb_text
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log("Coordinator", "warning", f"Arbitration search failed: {e}")
 
-        # 7) 构建简报（含对话上下文，让报告能引用之前的分析）
-        brief = self._build_brief(user_query, resolved, conflicts,
-                                  final_doc, arbitration, findings, lang,
+        return self._build_brief(user_query, resolved, conflicts,
+                                  doc_text, arbitration, findings, lang,
                                   self._chat_context)
-
-        # 8) LLM 只负责：基于已裁决的事实写报告
-        messages = [
-            {"role": "system", "content": self.synthesis_prompt},
-            {"role": "user", "content": brief},
-        ]
-
-        if on_token:
-            return self.llm.chat_stream(messages, on_token=on_token, model="qwen-max")
-        return self.llm.chat(messages, model="qwen-max")
 
     # ------------------------------------------------------------
     # Claim 提取 / 裁决 / 简报构建
@@ -789,6 +948,34 @@ source_type 判断规则:
             except _json.JSONDecodeError:
                 pass
         return []
+
+    def _fallback_extract(self, raw_text: str) -> list[dict]:
+        """暴力兜底：从原始文本中提取含数字的行，构建基础 claims。"""
+        import re
+        claims = []
+        # 匹配 "数字 + 单位" 模式
+        pattern = re.compile(
+            r'([\d,]+\.?\d*)\s*(亿元|亿|万元|万|元|%|％)\s*[^\n]{0,80}'
+        )
+        seen_values = set()
+        for m in pattern.finditer(raw_text):
+            value = m.group(0).strip()[:120]
+            sig = value[:60]
+            if sig in seen_values:
+                continue
+            seen_values.add(sig)
+            # 简单分类
+            surrounding = raw_text[max(0, m.start()-60):m.end()+60]
+            is_forecast = any(kw in surrounding for kw in
+                            ['预计', '预测', '预告', '估计'])
+            claims.append({
+                "metric": "数据",
+                "value": value,
+                "source_type": "forecast" if is_forecast else "unknown",
+                "source_label": "分析记录",
+                "date": "unknown",
+            })
+        return claims[:15]
 
     def _resolve_claims(self, claims: list[dict]) -> tuple[list[dict], list[dict]]:
         """裁决冲突：分组 → 排序 → 选出最佳。
@@ -892,9 +1079,7 @@ source_type 判断规则:
             return None
         metrics = list(set(c.get("metric", "") for c in conflicts))
         metric_str = " ".join(metrics[:3])
-        return (f"{user_query} {metric_str} 官方公告 实际数据 "
-                f"site:cninfo.com.cn OR site:sse.com.cn OR site:szse.cn"
-                f" -预计 -预测 -预告 -forecast")
+        return (f"{user_query} {metric_str} 的官方公告实际数据，排除业绩预告和预测数据")
 
     def _build_brief(self, user_query: str, resolved: list[dict],
                      conflicts: list[dict], doc_text: str,
@@ -984,24 +1169,140 @@ source_type 判断规则:
             parts.append(brief_findings)
             parts.append("")
 
-        # ── 输出指令（简洁，因为数据已经裁决好了）──
+        # ── 输出指令（强制使用已验证数据）──
         parts.append("---")
-        parts.append(
-            "## 输出要求\n\n"
-            "1. 直接回答用户问题。第一段就给答案。\n"
-            "2. 使用「已验证事实」表中的数据。如果表中有具体数字，直接引用。\n"
-            "3. 标注来源时，引用表格中的 Source 和 Date 列。\n"
-            "4. 如果「未解决的冲突」中有相关指标，在报告中指出不确定性和矛盾来源。\n"
-            "5. 不要引入表格中没有的新数据。不要做额外的推测或分析。"
-            if zh else
-            "## Instructions\n\n"
-            "1. Answer the user's question directly. Lead with the answer.\n"
-            "2. Use ONLY data from the Verified Facts table. Cite Source and Date.\n"
-            "3. If Unresolved Conflicts are relevant, note the uncertainty.\n"
-            "4. Do NOT introduce data not in the table. Do NOT speculate."
-        )
+        if resolved:
+            parts.append(
+                "## 输出要求\n\n"
+                "1. 上面「已验证事实」表是你唯一允许使用的数据来源。禁止使用表中没有的数字。\n"
+                "2. 如果你看到搜索结果中有数字但表里没有 → 说明该数字在冲突裁决中被淘汰了，不要使用。\n"
+                "3. 第一句直接给答案。结构跟问题走，不用模板。\n"
+                "4. 标注来源用表中的 Source 和 Date 列。\n"
+                "5. 有未解决的冲突时指出来。"
+                if zh else
+                "## Instructions\n\n"
+                "1. ONLY use data from the Verified Facts table above. Do NOT use numbers not in the table.\n"
+                "2. If search results have numbers not in the table → they were removed during conflict resolution. Do not use them.\n"
+                "3. Lead with the answer. Structure follows the question, not a template.\n"
+                "4. Cite Source and Date from the table.\n"
+                "5. Note unresolved conflicts if any."
+            )
+        else:
+            parts.append(
+                "## 输出要求\n\n"
+                "1. 第一句直接给答案。结构跟问题走，不用模板。\n"
+                "2. 不确定的事就说\"不确定\"或\"信息不足\"，不要用确定语气描述不确定的事。\n"
+                "3. 标注来源（文档页码或网络来源媒体名+日期）。"
+                if zh else
+                "## Instructions\n\n"
+                "1. Lead with the answer. Do not use templates.\n"
+                "2. Say \"uncertain\" or \"insufficient information\" when unsure — don't sound certain about uncertain things.\n"
+                "3. Cite sources."
+            )
 
         return "\n".join(parts)
+
+    # ------------------------------------------------------------
+    # 工具
+    # ------------------------------------------------------------
+
+    # ------------------------------------------------------------
+    # 快速通道：简单查数据 bypass 编排器
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def _is_simple_lookup(query: str) -> bool:
+        """判断是否为简单事实查询——明确问一个数字/事实，不需要多 Agent。"""
+        q = query.strip()
+        # 只有明确查事实关键词 + 短问题才走快速通道
+        fact_keywords = ['多少', '什么时候', '代码', '股价', '市值', '市盈率',
+                        '地址', '电话', '利率', '汇率', '几点', '在哪',
+                        'what is', 'how many', 'how much', 'when did']
+        analysis_keywords = ['分析', '评估', '风险', '怎么样', '为什么', '是否',
+                           '全面', '综合', '完整', '对比', '比较', '有哪些',
+                           '哪些', '名单', '列表', '排名', '走势', '趋势',
+                           '如何', '怎样', '增长', '下降', '变化', '影响',
+                           'analyze', 'assess', 'risk', 'comprehensive', 'compare',
+                           'evaluate', 'why', 'which companies', 'list of']
+
+        has_fact = any(kw in q.lower() for kw in fact_keywords)
+        has_analysis = any(kw in q.lower() for kw in analysis_keywords)
+
+        if has_analysis:
+            return False
+        if has_fact and len(q) < 30:
+            return True
+        return False
+
+    def _fast_answer(self, user_query: str, vector_store: VectorStore,
+                     api_key: str, on_token, web_search_enabled: bool,
+                     doc_company: str = "") -> str:
+        """简单查询：直接 qwen-max + enable_search，不走编排器。"""
+        from datetime import datetime
+        today = datetime.now().strftime("%Y年%m月%d日")
+
+        # 文档上下文（如有）
+        doc_context = ""
+        if not vector_store.is_empty:
+            try:
+                results = vector_store.search(user_query, top_k=2, api_key=api_key)
+                if results:
+                    doc_context = "\n".join(
+                        f"[第{r.chunk.page}页] {r.chunk.text[:300]}" for r in results[:2]
+                    )
+            except Exception:
+                pass
+
+        company_hint = ""
+        if doc_company:
+            company_hint = f"\n注意：你正在分析的公司是{doc_company}。只回答关于该公司的数据，忽略其他公司的信息。\n"
+
+        prompt = f"""今天是{today}。请联网搜索最新信息后回答。
+
+{f'## 用户上传的文档（仅供参考）\n{doc_context[:1500]}' if doc_context else ''}
+{company_hint}
+## 用户问题
+{user_query}
+
+请联网搜索后直接回答。有具体数据列出并标注来源。不确定说"不确定"。不要说你没有访问权限——你已经联网了。"""
+
+        messages = [{"role": "user", "content": prompt}]
+
+        if on_token and web_search_enabled:
+            return self.llm.chat_stream(
+                messages, on_token=on_token, model="qwen-max", enable_search=True
+            )
+        elif web_search_enabled:
+            return self.llm.chat(
+                messages, model="qwen-max", enable_search=True
+            )
+        elif on_token:
+            return self.llm.chat_stream(
+                messages, on_token=on_token, model="qwen-max"
+            )
+        return self.llm.chat(messages, model="qwen-max")
+
+    # ------------------------------------------------------------
+    # 工具
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def _parse_agent_output(raw: str, agent_name: str) -> dict | None:
+        """尝试从 Agent 的原始输出中解析 JSON 结构。失败返回 None。"""
+        import json as _json
+        text = raw.strip()
+        # 找 JSON 边界
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            obj = _json.loads(text[start:end + 1])
+            if isinstance(obj, dict) and "status" in obj:
+                return obj
+        except _json.JSONDecodeError:
+            pass
+        return None
 
     # ------------------------------------------------------------
     # 工具

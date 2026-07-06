@@ -39,17 +39,23 @@ class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
         self._openai_client: Optional[OpenAI] = None
-        # 设置全局 api_key（避免逐次传参导致的 encoding 问题）
+        # 设置全局 api_key + 国内备用端点
         if config.is_dashscope and config.api_key:
             import dashscope
-            dashscope.api_key = config.api_key
+            clean_key = config.api_key.strip().encode('ascii', errors='ignore').decode('ascii')
+            dashscope.api_key = clean_key
+            # 尝试使用国内直连端点，避免 VPN DNS 解析问题
+            try:
+                dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # 公开接口
     # ------------------------------------------------------------------
 
     def chat(self, messages: list[dict], **kwargs) -> str:
-        """发送消息并返回模型回复文本。自动重试最多 2 次。"""
+        """发送消息并返回模型回复文本。自动重试，DNS 错误等更长时间。"""
         last_error = None
         for attempt in range(3):
             try:
@@ -59,8 +65,15 @@ class LLMClient:
                 last_error = e
                 if attempt < 2:
                     import time
-                    time.sleep(1.5 * (attempt + 1))
-        raise RuntimeError(f"LLM 调用失败（重试3次后）: {last_error}")
+                    # DNS/网络错误等更久，其他错误等短一些
+                    err_msg = str(e).lower()
+                    wait = 3.0 * (attempt + 1) if any(kw in err_msg for kw in
+                        ['dns', 'resolve', 'connection', 'timeout', 'refused']) else 1.5 * (attempt + 1)
+                    time.sleep(wait)
+        # 给出更明确的错误信息
+        err_type = "网络连接" if any(kw in str(last_error).lower() for kw in
+            ['dns', 'resolve', 'connection', 'timeout']) else "API调用"
+        raise RuntimeError(f"{err_type}失败（重试3次后）。请检查网络连接。如果用VPN，试试关掉VPN后重试。错误: {last_error}")
 
     def chat_stream(self, messages: list[dict], on_token=None, **kwargs) -> str:
         """流式调用 LLM，每收到一个 token 调用 on_token(token)，返回完整文本。"""

@@ -221,6 +221,9 @@ class VectorStore:
     @property
     def is_empty(self) -> bool:
         return len(self._chunks) == 0
+    @property
+    def has_semantic_search(self) -> bool:
+        return self._index is not None
 
     def build_index(self, chunks: list[DocumentChunk], tables: list[DocumentTable],
                     api_key: str = ""):
@@ -229,9 +232,15 @@ class VectorStore:
         if api_key:
             import dashscope
             dashscope.api_key = api_key
-        vectors = self._embed_batch([c.text for c in chunks])
-        self._index = faiss.IndexFlatIP(vectors.shape[1])
-        self._index.add(vectors.astype(np.float32))
+        try:
+            vectors = self._embed_batch([c.text for c in chunks])
+            self._index = faiss.IndexFlatIP(vectors.shape[1])
+            self._index.add(vectors.astype(np.float32))
+        except Exception as e:
+            # embedding 失败（如 DNS/网络问题）→ 退化为纯关键词搜索
+            import sys
+            print(f"[RAG] Embedding failed, falling back to keyword-only search: {e}", file=sys.stderr)
+            self._index = None  # 标记 FAISS 不可用
         self._front_chunks = [c for c in chunks if c.page <= 3]
 
     def search(self, query: str, top_k: int = 20,
@@ -249,25 +258,28 @@ class VectorStore:
         # ── 第一路：关键词精确搜索 ──
         kw_results = self.keyword_search(query, top_k=top_k)
 
-        # ── 第二路：FAISS 语义检索 ──
-        queries = [query]
-        if extra_queries:
-            queries.extend(extra_queries)
-
+        # ── 第二路：FAISS 语义检索（如果 embedding 可用）──
         faiss_results = []
-        for q in queries:
-            vec = self._embed_batch([q])[0].reshape(1, -1).astype(np.float32)
-            k = min(top_k * 2, len(self._chunks))
-            scores, indices = self._index.search(vec, k)
-            for score, idx in zip(scores[0], indices[0]):
-                if 0 <= idx < len(self._chunks):
-                    chunk = self._chunks[idx]
-                    adjusted_score = float(score)
-                    if chunk.page <= 5:
-                        adjusted_score *= 0.4
-                    faiss_results.append(
-                        RetrievalResult(chunk=chunk, score=adjusted_score)
-                    )
+        if self._index is not None:
+            queries = [query]
+            if extra_queries:
+                queries.extend(extra_queries)
+            try:
+                for q in queries:
+                    vec = self._embed_batch([q])[0].reshape(1, -1).astype(np.float32)
+                    k = min(top_k * 2, len(self._chunks))
+                    scores, indices = self._index.search(vec, k)
+                    for score, idx in zip(scores[0], indices[0]):
+                        if 0 <= idx < len(self._chunks):
+                            chunk = self._chunks[idx]
+                            adjusted_score = float(score)
+                            if chunk.page <= 5:
+                                adjusted_score *= 0.4
+                            faiss_results.append(
+                                RetrievalResult(chunk=chunk, score=adjusted_score)
+                            )
+            except Exception:
+                pass  # FAISS 搜索失败，退回关键词结果
 
         # ── 合并去重：关键词结果放前面，FAISS结果补后面 ──
         seen_sigs = set()
@@ -398,14 +410,25 @@ class VectorStore:
         all_vecs = []
         for i in range(0, len(texts), 10):
             batch = texts[i:i + 10]
-            resp = dashscope.TextEmbedding.call(
-                model="text-embedding-v3",
-                input=batch,
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(f"Embedding API 错误: {resp.message}")
-            for emb in resp.output["embeddings"]:
-                all_vecs.append(np.array(emb["embedding"], dtype=np.float32))
+            last_err = None
+            for attempt in range(3):
+                try:
+                    resp = dashscope.TextEmbedding.call(
+                        model="text-embedding-v3",
+                        input=batch,
+                    )
+                    if resp.status_code == 200:
+                        for emb in resp.output["embeddings"]:
+                            all_vecs.append(np.array(emb["embedding"], dtype=np.float32))
+                        break
+                    last_err = RuntimeError(f"Embedding API error (status={resp.status_code}): {resp.message}")
+                except Exception as e:
+                    last_err = e
+                if attempt < 2:
+                    import time
+                    time.sleep(2.0 * (attempt + 1))
+            else:
+                raise RuntimeError(f"Embedding API 调用失败（重试3次后）。请检查网络连接。如果用VPN，试试关掉VPN。错误: {last_err}")
         return np.stack(all_vecs)
 
 
