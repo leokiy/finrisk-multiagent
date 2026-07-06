@@ -19,17 +19,16 @@
 
 FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaboration）**架构的金融文档风险分析平台。
 
-上传一份金融文档（年报、招股书、债券募集说明书等），提出风险相关问题，系统自动**扫描文档、生成搜索策略、调度 4 个专业 Agent 并行工作**，最后综合成结构化风险评估报告。
+上传一份金融文档，提出风险相关问题。系统内置的 **Coordinator（协调 Agent）** 自动判断问题复杂度——简单查数据自己搜索回答、专项分析调度相关专家、全面评估启动完整 Agent 编队——最后综合成结构化报告。
 
 ### 核心特色
 
-- 🧠 **Multi-Agent 协作**: 4 个专业化 Agent 各司其职，不是单模型"一问一答"
-- 📎 **RAG 文档检索**: FAISS 向量库 + DashScope Embedding，精准检索 PDF 相关段落，支持全量表格提取
-- 🌐 **联网搜索**: 每个 Agent 基于文档简报生成专属搜索词，通过 DashScope 内置搜索（enable_search）并行获取最新数据
-- 🎯 **自适应分析深度**: 自动判断问题类型——查数据直接给答案、专项分析聚焦回答、全面评估走完整流程
-- 🔍 **Devil's Advocate 机制**: 内置"魔鬼代言人"Agent，专门挑战其他 Agent 的结论（全面评估模式）
-- 🔑 **用户自有 API Key**: 不内置任何密钥，用户完全掌控自己的 API 使用
-- ⚡ **流式输出**: 最终报告逐字实时生成
+- 🧠 **Coordinator 驱动**: LLM 驱动的协调 Agent，按问题复杂度自动选择策略（ReAct 决策循环）
+- 🤖 **Agent 自主判断**: 每个 Agent 分析后声明 `[COMPLETE]`（信息足够）或 `[NEED_MORE]`（需要搜索），Coordinator 汇总决定是否继续
+- 📎 **混合 RAG 检索**: 关键词精确匹配 + FAISS 语义检索，目录页自动降权，低质量文本自动过滤
+- 🌐 **双路联网搜索**: DDGS（拿 URL）+ DashScope enable_search（拿详实内容），并行执行
+- 📊 **RAG 评估体系**: RAG Triad 三维量化评估（Context Relevance / Faithfulness / Answer Relevance），不靠感觉调参
+- 🔑 **用户自有 API Key**: 不内置任何密钥
 
 ---
 
@@ -38,35 +37,38 @@ FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaborati
 ```mermaid
 flowchart TB
     A[👤 用户上传文档 + 提问]
-    A --> B[📋 第零轮：文档简报<br/>扫描 → 提取公司名/代码/行业/报告期]
-    B --> C[🌐 联网搜索<br/>基于简报生成搜索词 → enable_search 并行]
-    C --> D[📊 数据提取 Agent]
-    C --> E[⚠️ 风险评估 Agent]
-    C --> F[📋 合规审查 Agent]
-    D --> G[🔍 深度质疑 Agent<br/>挑战结论 / 寻找盲点]
-    E --> G
-    F --> G
-    G --> H[🎯 Orchestrator 综合裁决<br/>factual 直接答 · analytical 聚焦答 · comprehensive 完整报告]
+    A --> B[🧠 Coordinator 判断问题复杂度]
+    B --> C{简单查询?}
+    C -->|是| D[🔍 混合RAG检索 + 双路联网搜索]
+    D --> E[✍️ qwen-max 综合回答]
+    C -->|否| F{专项分析?}
+    F -->|是| G[📊 按需派 Agent + 搜索]
+    G --> H[Agent 输出 COMPLETE/NEED_MORE]
+    H -->|NEED_MORE| I[Coordinator 补搜 → 回传 Agent]
+    I --> H
+    H -->|COMPLETE| E
+    F -->|否 全面评估| J[🤖 全部 Agent + 魔鬼代言人]
+    J --> H
 ```
 
-### 自适应分析深度
+### Coordinator 三步策略
 
-| 问题类型 | 示例 | 流程 |
-|----------|------|------|
-| **factual** 数据查询 | "2026年一季度利润是多少？" | RAG检索 + enable_search → 一句话回答 |
-| **analytical** 专项分析 | "偿债能力怎么样？" | 3 Agent并行 + 直接综合 |
-| **comprehensive** 全面评估 | "做个全面风险评估" | 4 Agent + 魔鬼代言人 + 反驳 + 完整报告 |
+| 问题类型 | Coordinator 策略 | 示例 |
+|----------|-----------------|------|
+| **简单查询** | 自己搜索 + 直接回答，不派 Agent | "2026年一季度利润是多少？" |
+| **专项分析** | 先搜文档和网络 → 需要才派专家 → Agent 自判是否够 | "偿债能力怎么样？" |
+| **全面评估** | 搜 → 派多位专家并行 → 魔鬼代言人质疑 | "做个全面风险评估" |
 
 ### 四个专业 Agent
 
-每个 Agent 用专业能力**回答问题**，不是机械填充检查清单：
+每个 Agent 用专业能力**回答问题**，不是机械填充检查清单。输出末尾声明完整性：
 
 | Agent | 角色 | 工作方式 |
 |-------|------|----------|
-| 📊 **数据提取** | CFA+CPA 审计专家 | 先理解问题 → 只提取相关数据 → 适可而止 |
-| ⚠️ **风险评估** | 18年风控经验 | 用户只问偿债就只分析偿债，不顺便打分其他维度 |
-| 📋 **合规审查** | 前证监会预审员 | 聚焦用户关心的合规领域，不逐条审查所有框架 |
-| 🔍 **深度质疑** | 桥水 Red Team | 只质疑与用户问题相关的结论，不是抬杠机器 |
+| 📊 **数据提取** | CFA+CPA 审计专家 | 先理解问题 → 只提取相关数据 → `[COMPLETE]` 或 `[NEED_MORE]` |
+| ⚠️ **风险评估** | 18年风控经验 | 只分析用户关心的维度 → 自判信息是否足够 |
+| 📋 **合规审查** | 前证监会预审员 | 聚焦用户问的合规领域 → 不够就说需要搜什么 |
+| 🔍 **深度质疑** | 桥水 Red Team | 只质疑相关问题 → 弹药不够就申请搜索 |
 
 ---
 
@@ -75,7 +77,7 @@ flowchart TB
 ### 前置要求
 
 - Python 3.10+
-- [DashScope API Key](https://dashscope.console.aliyun.com/apiKey)（通义千问）
+- [DashScope API Key](https://dashscope.console.aliyun.com/apiKey)
 
 ### 1. 克隆项目
 
@@ -102,7 +104,7 @@ python -m streamlit run app.py
 2. 左侧边栏输入 DashScope API Key
 3. 上传金融文档（PDF / TXT / MD）
 4. 勾选 🌐 联网搜索
-5. 提问——系统自动判断问题类型，匹配合适的分析深度
+5. 提问——Coordinator 自动判断策略
 
 ---
 
@@ -116,35 +118,30 @@ finrisk-multiagent/
 ├── README.md
 │
 ├── src/
-│   ├── orchestrator.py         # 🎯 中央调度器：文档简报→搜索→Agent编排→综合
+│   ├── orchestrator_v2.py      # 🧠 Coordinator（ReAct决策循环 + Agent完整性判断）
 │   ├── agents/
-│   │   ├── base.py             # Agent 基类：RAG检索 + 简报注入 + LLM调用
+│   │   ├── base.py             # Agent 基类：混合RAG + 简报注入 + LLM调用
 │   │   ├── data_extractor.py   # 📊 数据提取 Agent
 │   │   ├── risk_assessor.py    # ⚠️ 风险评估 Agent
 │   │   ├── compliance_checker.py # 📋 合规审查 Agent
 │   │   └── devils_advocate.py  # 🔍 深度质疑 Agent
 │   ├── rag/
-│   │   └── engine.py           # RAG 模块：PDF加载·文本分块·表格提取·Embedding·FAISS
+│   │   └── engine.py           # RAG 模块：关键词+FAISS混合检索·表格提取·低质量过滤
 │   ├── search/
-│   │   └── web_search.py       # 联网搜索：DashScope enable_search + DDGS fallback
+│   │   └── web_search.py       # 联网搜索：DDGS(URL) + enable_search(内容) 双路
 │   └── llm/
-│       └── client.py           # LLM 客户端：DashScope + OpenAI兼容双模式·流式输出
+│       └── client.py           # LLM 客户端：DashScope + OpenAI兼容·流式输出
 │
-├── prompts/                    # 📝 Prompt 模板（Markdown 格式）
-│   ├── zh/                     # 中文 prompts
-│   │   ├── data_extractor.md
-│   │   ├── risk_assessor.md
-│   │   ├── compliance_checker.md
-│   │   ├── devils_advocate.md
-│   │   └── orchestrator.md
-│   └── en/                     # English prompts
+├── prompts/                    # 📝 Prompt 模板
+│   ├── zh/                     # 中文
+│   └── en/                     # English
 │
-├── eval/                        # 📊 RAG 评估体系
-│   ├── golden_set.json          # Golden Test Set (10 条代表性用例)
-│   └── evaluator.py             # RAG Triad 评估器 (CR / Faith / AR)
+├── eval/                       # 📊 RAG 评估体系
+│   ├── golden_set.json         # Golden Test Set
+│   └── evaluator.py            # RAG Triad 评估器 (CR / Faith / AR)
 │
-└── examples/                   # 示例文件
-    └── sample_report.md        # 示例分析报告
+└── examples/
+    └── sample_report.md
 ```
 
 ---
@@ -153,72 +150,28 @@ finrisk-multiagent/
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| **前端** | Streamlit | 纯 Python Web UI，零前端代码 |
-| **LLM** | DashScope (Qwen) / OpenAI 兼容 | qwen-turbo/plus/max |
-| **RAG** | FAISS + DashScope Embedding | 本地向量存储，全量 PDF 表格提取 |
-| **联网搜索** | DashScope enable_search | LLM 原生搜索，比传统搜索引擎 snippet 更精准 |
-| **文档处理** | pdfplumber + LangChain TextSplitter | PDF 文本提取 + 递归语义分块 + 表格结构化 |
-| **Agent 编排** | 自研轻量调度器 | 不依赖 LangChain Agent / CrewAI 等重型 Agent 框架 |
-| **并行调度** | concurrent.futures | 标准库，Agent 并行 + 搜索并行 |
-
----
-
-## 📊 示例输出
-
-<details>
-<summary>点击展开示例</summary>
-
-**Factual 查询**
-
-> 问：2026年一季度利润是多少？
->
-> 2026年一季度归母净利润为 **57.35 亿元**（网络来源：东方财富网、中证智能财讯）
-
-**Analytical 专项分析**
-
-> 问：偿债能力怎么样？
->
-> 中际旭创 2025 年半年度偿债能力**整体稳健，短期流动性压力可控**。
->
-> - 有息负债总额 ≈ 22.85 亿元，仅占净资产约 9.4%，杠杆极低
-> - 货币资金约 112-123 亿元，覆盖短期借款 119.46 亿元（来源：文档片段）
-
-</details>
-
-完整示例见 [examples/sample_report.md](examples/sample_report.md)
+| **前端** | Streamlit | 纯 Python Web UI |
+| **LLM** | DashScope (Qwen) / OpenAI 兼容 | turbo/plus/max |
+| **Coordinator** | ReAct 决策循环 | LLM 驱动的任务分解和调度 |
+| **RAG** | 关键词精确匹配 + FAISS 语义检索 | 双路融合，低质量自动过滤 |
+| **联网搜索** | DDGS + enable_search | URL + 详实内容双路并行 |
+| **文档处理** | pdfplumber + LangChain TextSplitter | PDF 文本提取 + 表格结构化 |
 
 ---
 
 ## 📊 RAG 评估体系
 
-不做"感觉好像好了一点"的玄学调参。基于 **RAG Triad** 框架的量化评估，每次改动自动跑分。
+基于 **RAG Triad** 框架的量化评估：
 
-### 三维度打分
-
-| 维度 | 衡量 | 满分 |
-|------|------|:--:|
-| **Context Relevance** | 检索到的文档段落对回答问题有帮助吗？ | 1.0 |
-| **Faithfulness** | 回答严格基于文档/搜索结果，没有编造吗？ | 1.0 |
-| **Answer Relevance** | 回答正面、直接地回应用户问题了吗？ | 1.0 |
-
-### 运行评估
+| 维度 | 衡量 | 
+|------|------|
+| **Context Relevance** | 检索到的文档段落对回答问题有帮助吗？ |
+| **Faithfulness** | 回答严格基于文档/搜索结果，没有编造吗？ |
+| **Answer Relevance** | 回答正面、直接地回应用户问题了吗？ |
 
 ```bash
-# 基线评估
 python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf
-
-# 改完代码后对比
-python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf --output eval/report_v2.md
 ```
-
-### 当前基线
-
-| 维度 | 分数 |
-|------|:----:|
-| Context Relevance | 0.56 |
-| Faithfulness | 0.90 |
-| Answer Relevance | 0.97 |
-| **Triad Avg** | **0.81** |
 
 ---
 
@@ -230,15 +183,13 @@ python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf --o
 | **持仓监控** | 定期审查持仓标的的风险变化 |
 | **信用评估** | 评估债券发行人的信用风险 |
 | **合规自查** | 对照监管框架检查信息披露的完整性 |
-| **监管科技** | 辅助监管机构进行信息披露合规检查和风险筛查 |
+| **监管科技** | 辅助监管机构进行信息披露合规检查 |
 
 ---
 
 ## ⚠️ 免责声明
 
-- 本系统由 AI 驱动，分析结果**仅供参考**，不构成投资建议、法律意见或任何形式的专业建议
-- 分析基于用户上传的文档和联网搜索结果，可能存在时效性差异
-- 用户应在做出任何决策前咨询持牌专业人士
+本系统由 AI 驱动，分析结果**仅供参考**，不构成投资建议或法律意见。
 
 ---
 
