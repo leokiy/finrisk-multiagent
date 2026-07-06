@@ -70,12 +70,19 @@ COORDINATOR_PROMPT_ZH = """# 🎯 你是金融文档分析系统的总协调人
 3. **Observe（观察）**: 看返回的结果——信息够了吗？还缺什么？
 4. **Repeat or Synthesize**: 如果够了 → synthesize。不够 → 回到 Think
 
-**关键原则：**
-- 先 run_analyst 让专家分析 → 专家会在输出末尾用 [SEARCH_REQUEST] 告诉你它们需要什么 → 你帮它们搜
-- 不要替专家猜"你需要搜什么"。让专家自己说，你负责执行。
-- 如果 run_analyst 的输出中有 [SEARCH_REQUEST]，下一轮必须 search_web 执行那些请求
-- 文档和网络搜索是平权的信息源。搜索结果有数据就是有。
-- 如果用户只问一个数字，search_document + search_web 就够了，不需要跑 analyst。
+## 你的角色——不仅仅是调度员
+
+你是协调者，不是传话筒。你的职责：
+1. **审阅专家输出**——专家说了什么？有矛盾吗？缺什么？
+2. **指导专家**——告诉专家"你上次忽略了X，这次重点关注X"或"你的结论和网络数据矛盾，重新评估"
+3. **按需搜索**——专家说需要什么就搜什么，不要替专家猜
+4. **判断时机**——信息够了就综合，不够就继续
+
+## 行动原则
+
+- **先分析、再搜索**。先 run_analyst 让专家看文档→专家告诉你缺什么→你搜→让专家看搜索结果重新分析
+- 不要把所有专家都跑一遍。只跑回答问题相关的专家。
+- 如果用户只问一个数字，search_document + search_web 就够了
 - 每次行动前想清楚：我为什么要做这一步？
 - 每轮用简体中文输出 JSON 格式的决策。
 
@@ -263,7 +270,8 @@ class OrchestratorV2:
             if actions:
                 results = self._execute_actions(
                     actions, user_query, vector_store, api_key,
-                    web_search_enabled, searched_queries, accumulated_web
+                    web_search_enabled, searched_queries, accumulated_web,
+                    all_findings
                 )
                 observation = self._format_observations(results, lang)
                 all_findings.append(observation)
@@ -358,7 +366,8 @@ class OrchestratorV2:
                          vector_store: VectorStore, api_key: str,
                          web_search_enabled: bool,
                          searched_queries: set[str],
-                         accumulated_web: list[dict]) -> dict[str, list]:
+                         accumulated_web: list[dict],
+                         all_findings: list[str]) -> dict[str, list]:
         """执行一批 actions，并行跑。"""
         results: dict[str, list] = {}
 
@@ -391,10 +400,17 @@ class OrchestratorV2:
                     name = action.get("analyst", "data_extractor")
                     instr = action.get("instruction", user_query)
                     key = f"analyst:{name}"
-                    # 把累积的网络搜索结果传给 Agent
+                    # 把累积的网络搜索结果 + 之前所有发现传给 Agent
                     web_for_agent = _format_web_for_agent(accumulated_web)
+                    # 构建 Context：之前发现了什么、还需要关注什么
+                    ctx = action.get("context", "") or ""
+                    if not ctx and len(all_findings) > 0:
+                        ctx = "此前分析中已收集的信息：\n" + "\n".join(all_findings[-3:])[:2000]
+                    full_instr = instr
+                    if ctx:
+                        full_instr = f"{instr}\n\n## 参考背景（此前分析中发现的信息）\n{ctx}"
                     agent_result = self._run_analyst(
-                        name, instr, vector_store, api_key, web_for_agent
+                        name, full_instr, vector_store, api_key, web_for_agent
                     )
                     return key, [agent_result]
 
