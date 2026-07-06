@@ -83,6 +83,11 @@ class Orchestrator:
 
         max_iterations: 最大循环轮次（默认 10，可调）
         """
+        # 确保 dashscope 全局 api_key 设置（线程安全）
+        if api_key and self.llm.config.is_dashscope:
+            import dashscope
+            dashscope.api_key = api_key
+
         self.reporter.clear()
         lang = self.language
         max_iter = max_iterations
@@ -905,6 +910,11 @@ devils_advocate_verify: <query>"""
         from datetime import datetime
         from src.llm.client import LLMClient, LLMConfig
         from src.search.web_search import WebResult
+
+        # 确保 dashscope 全局 api_key（线程中需要）
+        if api_key:
+            import dashscope
+            dashscope.api_key = api_key
 
         all_results: dict[str, list] = {}
         today = datetime.now().strftime("%Y年%m月%d日" if self.language == "zh" else "%B %d, %Y")
