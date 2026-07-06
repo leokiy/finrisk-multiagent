@@ -1102,17 +1102,15 @@ devils_advocate_verify: <query>"""
         today = datetime.now().strftime("%Y年%m月%d日" if lang == "zh" else "%B %d, %Y")
 
         if web_search_enabled and web_results:
-            # ── 有预搜索结果：直接注入，不重复搜索 ──
+            # ── 有预搜索结果：直接注入，标清来源 ──
             web_text_parts = []
             for i, wr in enumerate(web_results[:5], 1):
                 snippet = wr.snippet[:800] if wr.snippet else ""
                 title = wr.title[:120] if wr.title else ""
-                url = wr.url[:200] if wr.url else ""
                 if snippet:
-                    web_text_parts.append(
-                        f"### 搜索结果{i}: {title}\n来源: {url}\n内容: {snippet}"
-                    )
-            web_text = "\n\n".join(web_text_parts) if web_text_parts else "（未获取到搜索结果）"
+                    label = f"[搜{i}] {title}" if title else f"[搜{i}]"
+                    web_text_parts.append(f"{label}\n{snippet}")
+            web_text = "\n\n".join(web_text_parts) if web_text_parts else "（无）"
 
             if lang == "zh":
                 content = f"""你是数据查询助手。今天是{today}。
@@ -1120,8 +1118,9 @@ devils_advocate_verify: <query>"""
 文档：{doc_data}
 网络搜索：{web_text}
 规则：
-- 从搜索结果中复制数字回答。如搜到\"净利润57.35亿元\"就写\"净利润57.35亿元\"
-- 如果搜索结果有具体数字，直接用，标注网络来源
+- 从搜索结果中复制数字。如搜到\"净利润57.35亿元\"就写\"净利润57.35亿元（来源: [搜X] 标题）\"
+- 如果你的答案来自某个具体搜索结果，标注该结果的标题或日期，比如\"（来源: 东方财富网 2026-04-17）\"或\"（来源: 中际旭创2026年一季报公告）\"
+- 禁止写\"来源：网络搜索结果X\"这种模糊标注——必须写明媒体名/公告名/日期
 - 文档和搜索都没数据才说未找到
 - 最多3行"""
             else:
