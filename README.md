@@ -139,6 +139,10 @@ finrisk-multiagent/
 │   │   └── orchestrator.md
 │   └── en/                     # English prompts
 │
+├── eval/                        # 📊 RAG 评估体系
+│   ├── golden_set.json          # Golden Test Set (10 条代表性用例)
+│   └── evaluator.py             # RAG Triad 评估器 (CR / Faith / AR)
+│
 └── examples/                   # 示例文件
     └── sample_report.md        # 示例分析报告
 ```
@@ -182,6 +186,39 @@ finrisk-multiagent/
 </details>
 
 完整示例见 [examples/sample_report.md](examples/sample_report.md)
+
+---
+
+## 📊 RAG 评估体系
+
+不做"感觉好像好了一点"的玄学调参。基于 **RAG Triad** 框架的量化评估，每次改动自动跑分。
+
+### 三维度打分
+
+| 维度 | 衡量 | 满分 |
+|------|------|:--:|
+| **Context Relevance** | 检索到的文档段落对回答问题有帮助吗？ | 1.0 |
+| **Faithfulness** | 回答严格基于文档/搜索结果，没有编造吗？ | 1.0 |
+| **Answer Relevance** | 回答正面、直接地回应用户问题了吗？ | 1.0 |
+
+### 运行评估
+
+```bash
+# 基线评估
+python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf
+
+# 改完代码后对比
+python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf --output eval/report_v2.md
+```
+
+### 当前基线
+
+| 维度 | 分数 |
+|------|:----:|
+| Context Relevance | 0.56 |
+| Faithfulness | 0.90 |
+| Answer Relevance | 0.97 |
+| **Triad Avg** | **0.81** |
 
 ---
 
