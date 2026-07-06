@@ -757,7 +757,7 @@ if st.session_state.file_processed:
 
         # ── 运行多 Agent 分析 ──
         from src.llm.client import LLMClient, LLMConfig
-        from src.orchestrator import Orchestrator
+        from src.orchestrator_v2 import OrchestratorV2
 
         # 构建 LLM 客户端
         config = LLMConfig(
@@ -768,7 +768,7 @@ if st.session_state.file_processed:
             max_tokens=max_tokens,
         )
         llm_client = LLMClient(config)
-        orchestrator = Orchestrator(llm_client, language=st.session_state.language)
+        orchestrator = OrchestratorV2(llm_client, language=st.session_state.language)
 
         # ── 显示最终报告（流式输出）──
         with st.chat_message("assistant"):
