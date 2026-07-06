@@ -115,7 +115,23 @@ class DocumentLoader:
 
 
 class TextChunker:
-    """大块分块: 1200字/块, 300字重叠, 适应长文档。"""
+    """大块分块: 1200字/块, 300字重叠, 自动过滤低质量文本。"""
+
+    # 低质量文本模式（目录页、页眉页脚、纯数字表格等）
+    _LOW_QUALITY_PATTERNS = [
+        # 目录特征
+        r'^[\.\s\d]*目\s*录[\.\s\d]*$',
+        r'^[IVX]+[\.\s、].*$',  # 罗马数字章节
+        r'^第[一二三四五六七八九十\d]+[章节篇]',  # 第X章/第X节
+        # 纯页码/页眉
+        r'^[\s\d]+$',  # 纯空白和数字
+        r'^\d{1,3}\s*$',  # 1-3位数字（页码）
+        # 纯分隔符
+        r'^[-—\.·•]{3,}\s*$',
+        # 证券代码/公告编号（不是内容）
+        r'^证券代码[：:].*$',
+        r'^公告编号[：:].*$',
+    ]
 
     def __init__(self, chunk_size: int = 1200, chunk_overlap: int = 300):
         self.splitter = RecursiveCharacterTextSplitter(
@@ -130,12 +146,42 @@ class TextChunker:
             is_separator_regex=False,
         )
 
+    def _is_low_quality(self, text: str, page: int) -> bool:
+        """判断文本块是否低质量（目录页、页眉页脚、纯数字行等）。"""
+        t = text.strip()
+
+        # 太短
+        if len(t) < 50:
+            return True
+
+        # 前5页的文本，如果以章节标题开头（目录页特征），降为低质量
+        if page <= 5:
+            # 检查是否主要是章节列表
+            chapter_lines = sum(1 for line in t.split("\n")
+                              if line.strip() and
+                              any(kw in line for kw in ["目录", "节", "章", "部分", "释义", "声明"]))
+            if chapter_lines >= 3 and len(t) < 400:
+                return True
+
+        # 正则匹配低质量模式
+        import re as _re
+        for pattern in self._LOW_QUALITY_PATTERNS:
+            if _re.match(pattern, t):
+                return True
+
+        # 非中英文内容占比过高
+        content_chars = sum(1 for c in t if '一' <= c <= '鿿' or c.isalpha())
+        if content_chars / max(len(t), 1) < 0.3:
+            return True
+
+        return False
+
     def chunk_document(self, pages: list[dict], source_name: str) -> list[DocumentChunk]:
         chunks = []
         for page_info in pages:
             texts = self.splitter.split_text(page_info["text"])
             for idx, text in enumerate(texts):
-                if len(text.strip()) < 50:
+                if self._is_low_quality(text, page_info["page"]):
                     continue
                 chunks.append(DocumentChunk(
                     text=text.strip(),
@@ -191,7 +237,7 @@ class VectorStore:
     def search(self, query: str, top_k: int = 20,
                extra_queries: list[str] | None = None,
                **kwargs) -> list[RetrievalResult]:
-        """主检索: RAG向量检索 + 表格关键词匹配。"""
+        """主检索: RAG向量检索 + 前置页降权 + 多路融合。"""
         if self.is_empty:
             return []
 
@@ -202,24 +248,22 @@ class VectorStore:
         all_results = []
         for q in queries:
             vec = self._embed_batch([q])[0].reshape(1, -1).astype(np.float32)
-            k = min(top_k, len(self._chunks))
+            k = min(top_k * 2, len(self._chunks))  # 多搜一些，后面要降权
             scores, indices = self._index.search(vec, k)
             for score, idx in zip(scores[0], indices[0]):
                 if 0 <= idx < len(self._chunks):
+                    chunk = self._chunks[idx]
+                    adjusted_score = float(score)
+
+                    # 前置页降权：前5页（目录、释义、声明等）乘以 0.4
+                    if chunk.page <= 5:
+                        adjusted_score *= 0.4
+
                     all_results.append(
-                        RetrievalResult(chunk=self._chunks[idx], score=float(score))
+                        RetrievalResult(chunk=chunk, score=adjusted_score)
                     )
 
         ranked = self._dedup_rank(all_results, top_k)
-
-        # 首页锚定
-        if self._front_chunks:
-            seen_texts = {r.chunk.text for r in ranked}
-            for fc in self._front_chunks:
-                if fc.text not in seen_texts:
-                    ranked.insert(0, RetrievalResult(chunk=fc, score=0.99))
-                    seen_texts.add(fc.text)
-
         return ranked[:top_k]
 
     def search_tables(self, query: str, top_k: int = 5) -> list[DocumentTable]:
@@ -304,8 +348,61 @@ def build_rag_from_file(file_path: str, api_key: str = "") -> VectorStore:
     return store
 
 
+def rewrite_query_for_rag(query: str, api_key: str, language: str = "zh") -> list[str]:
+    """用 LLM 将用户问题改写为 2-3 个 RAG 检索关键词。
+
+    与 rewrite_query_for_search 不同：这个改写目标是文档内部检索，
+    提取问题中的关键实体和指标，生成更精准的搜索词。
+
+    例："毛利率为什么下降？"
+      → ["毛利率 变动", "营业成本 营业收入 趋势", "成本上升"]
+    """
+    if not api_key or len(query) < 5:
+        return []
+
+    prompt_zh = f"""你是文档检索专家。把用户问题改写为2-3个关键词组合，用于在PDF文档中搜索最相关的段落。
+
+规则:
+- 只输出关键词组合，每行一个，不要编号和解释
+- 提取问题中的核心实体和指标，拆分不同角度
+- 每个关键词组合不超过15字
+
+用户问题: {query}
+
+检索关键词:"""
+
+    prompt_en = f"""You are a document retrieval expert. Rewrite the user question into 2-3 keyword combinations for searching a PDF document.
+
+Rules:
+- Output only keyword combos, one per line, no numbering
+- Extract core entities and metrics, split different angles
+- Each combo under 10 words
+
+Question: {query}
+
+Keywords:"""
+
+    prompt = prompt_zh if language == "zh" else prompt_en
+
+    from src.llm.client import LLMClient, LLMConfig
+    config = LLMConfig(api_key=api_key, model="qwen-turbo", temperature=0.0, max_tokens=150)
+    client = LLMClient(config)
+    try:
+        resp = client.chat([{"role": "user", "content": prompt}])
+    except Exception:
+        return []
+
+    queries = []
+    for line in resp.strip().split("\n"):
+        q = line.strip().lstrip("- ").lstrip("0123456789. ").strip()
+        if q and len(q) > 2 and q != query:
+            queries.append(q)
+
+    return queries[:3] if queries else []
+
+
 def rewrite_query_for_search(query: str, api_key: str, language: str = "zh") -> list[str]:
-    """用 LLM 将用户问题改写为 2-3 个更精准的检索查询（不分析，只改写）。"""
+    """用 LLM 将用户问题改写为 2-3 个更精准的搜索查询（用于外部联网搜索）。"""
     prompt_zh = f"""你是一个搜索引擎查询优化器。把用户的问题改写为2-3个不同的搜索查询，每个查询从不同角度检索最相关的文档内容。
 
 规则:

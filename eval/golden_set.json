@@ -1,0 +1,85 @@
+{
+  "description": "FinRisk MultiAgent Golden Test Set — 覆盖 factual / analytical / comprehensive 三类问题",
+  "queries": [
+    {
+      "id": "F01",
+      "type": "factual",
+      "query": "2025年上半年归属于母公司股东的净利润是多少？",
+      "expected": "文档中应包含具体数字，约399,511万元或39.95亿元",
+      "doc_has_answer": true,
+      "check_points": ["数字", "归母净利润", "来源页码"]
+    },
+    {
+      "id": "F02",
+      "type": "factual",
+      "query": "公司的营业收入和营业成本分别是多少？",
+      "expected": "应列出具体金额。未指定时间则优先文档最新数据，文档无则网络搜索",
+      "doc_has_answer": true,
+      "check_points": ["营业收入", "营业成本", "具体数字"]
+    },
+    {
+      "id": "F03",
+      "type": "factual",
+      "query": "前五大客户销售占比是多少？",
+      "expected": "如有披露应给出具体占比，未披露应说明",
+      "doc_has_answer": true,
+      "check_points": ["客户集中度", "占比"]
+    },
+    {
+      "id": "F04",
+      "type": "factual",
+      "query": "公司2026年一季度的利润是多少？",
+      "expected": "文档内无此数据，应通过联网搜索获取（约57.35亿元），标注网络来源",
+      "doc_has_answer": false,
+      "check_points": ["联网搜索", "57.35亿", "网络来源", "与文档数据区分"]
+    },
+    {
+      "id": "A01",
+      "type": "analytical",
+      "query": "公司的偿债能力怎么样？",
+      "expected": "聚焦偿债指标分析：有息负债、利息保障倍数、流动比率等，不应展开市场风险或合规审查",
+      "doc_has_answer": true,
+      "check_points": ["偿债能力", "有息负债", "聚焦而非全面报告"]
+    },
+    {
+      "id": "A02",
+      "type": "analytical",
+      "query": "毛利率为什么下降？",
+      "expected": "分析毛利率变化原因，引用具体数据",
+      "doc_has_answer": true,
+      "check_points": ["毛利率变化", "原因分析", "证据引用"]
+    },
+    {
+      "id": "A03",
+      "type": "analytical",
+      "query": "有没有关联交易方面的合规风险？",
+      "expected": "聚焦关联交易合规，不应展开信息披露、公司治理等无关领域",
+      "doc_has_answer": true,
+      "check_points": ["关联交易", "合规风险", "聚焦单一领域"]
+    },
+    {
+      "id": "C01",
+      "type": "comprehensive",
+      "query": "做个全面的风险评估",
+      "expected": "四维度风险矩阵 + 合规审查 + 深度质疑 + 综合报告",
+      "doc_has_answer": true,
+      "check_points": ["四维度", "合规", "质疑", "综合报告"]
+    },
+    {
+      "id": "C02",
+      "type": "comprehensive",
+      "query": "这份文件有没有刻意回避的问题？",
+      "expected": "应识别信息缺口和潜在盲点，区分'未披露'和'刻意回避'",
+      "doc_has_answer": true,
+      "check_points": ["盲点识别", "信息缺口", "质疑视角"]
+    },
+    {
+      "id": "F05",
+      "type": "factual",
+      "query": "控股股东质押比例是多少？",
+      "expected": "如有披露应给出具体比例",
+      "doc_has_answer": true,
+      "check_points": ["控股股东", "质押比例", "具体数字"]
+    }
+  ]
+}

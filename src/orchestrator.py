@@ -117,7 +117,7 @@ class Orchestrator:
         # ═══════════════════════════════════════════════════════════════
         if web_search_enabled:
             agent_search_queries = self._generate_agent_search_queries(
-                user_query, doc_brief, question_type
+                user_query, doc_brief, question_type, vector_store, api_key
             )
             # 写搜索词到执行日志
             sq_summary = {}
@@ -173,10 +173,18 @@ class Orchestrator:
 
             data_web_results = agent_web_results.get("data_extractor")
 
-            # 快速 RAG 检索（不跑 Agent）
+            # 快速 RAG 检索（不跑 Agent，但用查询改写提升召回）
             rag_text = ""
             if not vector_store.is_empty:
-                rag_results = vector_store.search(user_query, top_k=5, api_key=api_key)
+                extra = []
+                if api_key:
+                    try:
+                        from src.rag.engine import rewrite_query_for_rag
+                        extra = rewrite_query_for_rag(user_query, api_key, lang)
+                    except Exception:
+                        pass
+                rag_results = vector_store.search(user_query, top_k=5,
+                                                  extra_queries=extra, api_key=api_key)
                 if rag_results:
                     rag_text = "\n".join(
                         f"[第{r.chunk.page}页] {r.chunk.text[:300]}"
@@ -502,36 +510,62 @@ class Orchestrator:
 
     def _generate_agent_search_queries(self, user_query: str,
                                        doc_brief: str,
-                                       question_type: str) -> dict[str, list[str]]:
-        """基于文档简报 + 用户原始问题，为每个 Agent 生成精准搜索词。
+                                       question_type: str,
+                                       vector_store: VectorStore = None,
+                                       api_key: str = "") -> dict[str, list[str]]:
+        """基于文档简报 + 用户原始问题 + RAG文档上下文，为每个 Agent 生成精准搜索词。
 
-        关键改进：现在有了文档简报（公司名/代码/行业/报告期），
-        搜索词不再是瞎子摸象，而是有具体实体的定向搜索。
-
-        每个 Agent 生成 2 条：信息查询 + 交叉验证。
+        RAG增强：从文档中找到与用户问题最相关的段落，提取专业术语（如"归属于母公司
+        股东的净利润"）拼入搜索词，比光用公司名+通用词准得多。
         """
         lang = self.language
 
-        if question_type == "factual":
-            # 从文档简报中提取公司名和股票代码
-            company_name = ""
-            stock_code = ""
-            for line in doc_brief.split("\n"):
-                line = line.strip().lstrip("- ").strip()
-                if "公司全称" in line or "Entity" in line:
-                    val = line.split("：")[-1].split(":")[-1].strip()
-                    if val and val != "未知":
-                        company_name = val
-                if "股票代码" in line or "Stock" in line:
-                    val = line.split("：")[-1].split(":")[-1].strip()
-                    if val and val != "未知" and val != "无":
-                        stock_code = val
-            entity = stock_code or company_name
+        # ── RAG增强：从文档中提取与问题相关的关键上下文 ──
+        rag_context = ""
+        if vector_store and not vector_store.is_empty and api_key:
+            try:
+                # 用财务关键词而不是用户原问题检索，拿到相关数据段落而非目录
+                finance_kw = "利润 净利润 营业收入 资产 负债 现金流 毛利率 净利率 每股收益 归属于"
+                rag_query = f"{user_query} {finance_kw}"
+                rag_results = vector_store.search(rag_query, top_k=3, api_key=api_key)
+                if rag_results:
+                    rag_context = "\n".join(
+                        r.chunk.text[:300] for r in rag_results[:3]
+                    )[:1500]
+            except Exception:
+                pass
 
-            # 用自然语言构造查询——DDGS对自然语言查询返回的snippet更长更丰富
+        # ── 提取实体 ──
+        company_name = ""
+        stock_code = ""
+        for line in doc_brief.split("\n"):
+            line = line.strip().lstrip("- ").strip()
+            if "公司全称" in line or "Entity" in line:
+                val = line.split("：")[-1].split(":")[-1].strip()
+                if val and val != "未知":
+                    company_name = val
+            if "股票代码" in line or "Stock" in line:
+                val = line.split("：")[-1].split(":")[-1].strip()
+                if val and val != "未知" and val != "无":
+                    stock_code = val
+        entity = stock_code or company_name
+
+        if question_type == "factual":
+            # RAG增强：从文档中找到与问题最相关的段落，提取关键上下文
+            rag_hint = ""
+            if rag_context:
+                # 取rag_context中出现频率最高的财务相关词组（20-50字）
+                rag_hint = rag_context[:200].replace("\n", " ")
+
             if entity:
+                base = f"{entity} {user_query}"
+                if rag_hint:
+                    return {"data_extractor": [
+                        f"{base} {rag_hint[:120]} 最新数据",
+                        f"{entity} 2026年一季度 财报 数据 {rag_hint[:80]}",
+                    ]}
                 return {"data_extractor": [
-                    f"{entity} {user_query} 具体数据 金额",
+                    f"{base} 具体数据 金额",
                     f"{entity} 发布 2026年一季度 业绩 营收 净利润 数据",
                 ]}
             return {"data_extractor": [
@@ -540,26 +574,28 @@ class Orchestrator:
             ]}
 
         if lang == "zh":
-            prompt = f"""你是金融信息检索专家。用户向一个金融分析系统提了问题。请基于用户问题和文档主体信息，为每个Agent生成搜索查询。
+            prompt = f"""你是金融信息检索专家。基于用户问题、文档元信息和文档内容，为每个Agent生成精准搜索查询。
 
-**核心原则：搜索词必须围绕用户的问题，不要偏离去搜不相干的东西。**
+**核心原则：搜索词必须围绕用户的问题。用文档中出现的专业术语（而非通用词）构造查询。**
 
-## 用户原始问题（这是搜索的唯一目标）
+## 用户原始问题
 {user_query}
 
-## 文档主体信息（仅用于提取公司名/代码等实体）
+## 文档主体信息
 {doc_brief}
 
-## 各Agent的搜索任务（紧扣用户问题）
-- 数据提取Agent：搜索用户问题所需的具体数据
+## 文档中与问题相关的段落（用于提取专业术语）
+{rag_context if rag_context else '（无）'}
+
+## 各Agent搜索任务
+- 数据提取Agent：搜索用户问题所需的具体数据，使用文档中的精确指标名称
 - 风险评估Agent：搜索与用户问题相关的风险信息
 - 合规审查Agent：搜索与用户问题相关的合规信息
 - 深度质疑Agent：搜索用户问题可能涉及的争议或盲点
 
 ## 要求
-- **搜索词必须包含用户问题中的关键信息**（时间段、指标名称等）
-- 使用文档简报中的公司名/代码
-- 每条查询10-30字
+- 搜索词包含实体名/代码 + 文档中的专业术语 + 用户问题的关键信息
+- 每条10-30字
 - 严格按格式：
 data_extractor_info: <查询>
 data_extractor_verify: <查询>

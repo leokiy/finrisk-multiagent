@@ -138,10 +138,10 @@ class BaseAgent(ABC):
             return [], []
         # LLM 查询改写 → 多路精准检索
         extra_queries = []
-        if api_key and len(query) > 10:
+        if api_key and len(query) > 5:
             try:
-                from src.rag.engine import rewrite_query_for_search
-                extra_queries = rewrite_query_for_search(query, api_key, self.language)
+                from src.rag.engine import rewrite_query_for_rag
+                extra_queries = rewrite_query_for_rag(query, api_key, self.language)
             except Exception:
                 pass
         rag_results = store.search(query, top_k=top_k,
