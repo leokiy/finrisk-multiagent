@@ -71,11 +71,12 @@ COORDINATOR_PROMPT_ZH = """# 🎯 你是金融文档分析系统的总协调人
 4. **Repeat or Synthesize**: 如果够了 → synthesize。不够 → 回到 Think
 
 **关键原则：**
-- 文档和网络搜索是平权的信息源。搜索结果有数据就是有——不要因为"文档里没有"而否定搜索结果。
-- 数据提取Agent只查文档。如果它说"未找到"，但搜索结果有，以搜索结果为准。
+- 先 run_analyst 让专家分析 → 专家会在输出末尾用 [SEARCH_REQUEST] 告诉你它们需要什么 → 你帮它们搜
+- 不要替专家猜"你需要搜什么"。让专家自己说，你负责执行。
+- 如果 run_analyst 的输出中有 [SEARCH_REQUEST]，下一轮必须 search_web 执行那些请求
+- 文档和网络搜索是平权的信息源。搜索结果有数据就是有。
 - 如果用户只问一个数字，search_document + search_web 就够了，不需要跑 analyst。
-- 如果用户问分析性问题，先 search_document 查文档 → 不够再 search_web → 再不够才 run_analyst。
-- 每次行动前想清楚：我为什么要做这一步？它能给我什么？
+- 每次行动前想清楚：我为什么要做这一步？
 - 每轮用简体中文输出 JSON 格式的决策。
 
 ---
@@ -159,6 +160,21 @@ Each round, output ONE JSON object:
 When done: `{"thought": "...", "need_more": false}`"""
 
 
+def _format_web_for_agent(web_items: list[dict]) -> list | None:
+    """把累积的 web 结果格式化为 Agent 能接受的 WebResult 列表。"""
+    if not web_items:
+        return None
+    from src.search.web_search import WebResult
+    out = []
+    for item in web_items[-10:]:  # 最近 10 条
+        out.append(WebResult(
+            title=item.get("title", ""),
+            url=item.get("url", ""),
+            snippet=item.get("snippet", ""),
+        ))
+    return out if out else None
+
+
 # ═══════════════════════════════════════════════════════════════
 # Orchestrator V2
 # ═══════════════════════════════════════════════════════════════
@@ -224,6 +240,7 @@ class OrchestratorV2:
         # ── 累积的所有发现 ──
         all_findings: list[str] = []
         searched_queries: set[str] = set()
+        accumulated_web: list[dict] = []  # 跨轮累积的网络搜索结果
 
         for round_num in range(1, max_rounds + 1):
             self._log("Coordinator", "running",
@@ -246,7 +263,7 @@ class OrchestratorV2:
             if actions:
                 results = self._execute_actions(
                     actions, user_query, vector_store, api_key,
-                    web_search_enabled, searched_queries
+                    web_search_enabled, searched_queries, accumulated_web
                 )
                 observation = self._format_observations(results, lang)
                 all_findings.append(observation)
@@ -340,7 +357,8 @@ class OrchestratorV2:
     def _execute_actions(self, actions: list[dict], user_query: str,
                          vector_store: VectorStore, api_key: str,
                          web_search_enabled: bool,
-                         searched_queries: set[str]) -> dict[str, list]:
+                         searched_queries: set[str],
+                         accumulated_web: list[dict]) -> dict[str, list]:
         """执行一批 actions，并行跑。"""
         results: dict[str, list] = {}
 
@@ -366,13 +384,18 @@ class OrchestratorV2:
                         return key, [{"type": "cached", "text": "(重复查询，跳过)"}]
                     searched_queries.add(q)
                     web_results = self._search_web(q, api_key)
+                    accumulated_web.extend(web_results)  # 累积
                     return key, web_results
 
                 elif tool == "run_analyst":
                     name = action.get("analyst", "data_extractor")
                     instr = action.get("instruction", user_query)
                     key = f"analyst:{name}"
-                    agent_result = self._run_analyst(name, instr, vector_store, api_key)
+                    # 把累积的网络搜索结果传给 Agent
+                    web_for_agent = _format_web_for_agent(accumulated_web)
+                    agent_result = self._run_analyst(
+                        name, instr, vector_store, api_key, web_for_agent
+                    )
                     return key, [agent_result]
 
                 else:
@@ -446,8 +469,9 @@ class OrchestratorV2:
             return [{"type": "error", "text": str(e)}]
 
     def _run_analyst(self, name: str, instruction: str,
-                     vector_store: VectorStore, api_key: str) -> dict:
-        """运行指定分析师。"""
+                     vector_store: VectorStore, api_key: str,
+                     web_results: list | None = None) -> dict:
+        """运行指定分析师，传入累积的网络搜索结果。"""
         agents = {
             "data_extractor": self.data_extractor,
             "risk_assessor": self.risk_assessor,
@@ -458,7 +482,9 @@ class OrchestratorV2:
         if not agent:
             return {"type": "error", "text": f"未知分析师: {name}"}
 
-        result = agent.run(instruction, vector_store, api_key=api_key)
+        # 把累积的网络搜索结果传给 Agent
+        result = agent.run(instruction, vector_store, api_key=api_key,
+                          web_search_results=web_results)
         self._log(agent.name,
                   "done" if result.success else "error",
                   result.content[:200] if result.success else result.error)
