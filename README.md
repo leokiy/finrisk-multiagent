@@ -8,6 +8,7 @@
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![DashScope](https://img.shields.io/badge/LLM-DashScope(Qwen)-orange.svg)](https://dashscope.aliyun.com/)
+[![Docker](https://img.shields.io/badge/Docker-supported-blue.svg)](Dockerfile)
 
 *不是一个 AI 回答你——而是一个 AI 分析团队在帮你分析金融风险*
 
@@ -19,18 +20,20 @@
 
 FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaboration）**架构的金融文档风险分析平台。
 
-上传一份金融文档（或不传，直接提问），系统内置的 **Coordinator（协调 Agent）** 自动判断问题复杂度——简单查数据自己搜索回答、专项分析调度相关专家、全面评估启动完整 Agent 编队——最后综合成结构化报告。
+上传金融文档（或不传，直接提问），系统内置的 **Coordinator（协调 Agent）** 自动判断问题复杂度——简单查数据走快速通道直接回答，专项分析调度相关专家，全面评估启动完整 Agent 编队——最后综合成结构化报告。
 
 ### 核心特色
 
-- 🧠 **Coordinator 驱动**: LLM 驱动的协调 Agent，按问题复杂度自动选择策略（ReAct 决策循环）
-- 🤖 **Agent 自主判断**: 每个 Agent 分析后声明 `[COMPLETE]`（信息足够）或 `[NEED_MORE]`（需要搜索），Coordinator 汇总决定是否继续
-- 📊 **结构化 Claim 提取与裁决**: 综合阶段不再把原始文本碎片丢给 LLM——先提取结构化 claims，算法裁决冲突（actual > forecast、官方 > 媒体、多源 > 孤立），LLM 只负责基于已验证事实写报告
+- 🧠 **Coordinator 驱动**: ReAct 决策循环，自动判断问题类型并选择策略
+- 🤖 **工业级 Agent 定义**: 每个 Agent 有明确的输入/输出契约、成功标准、失效行为——参考 Anthropic agency-agents 框架
+- ⚡ **快速通道**: 简单查数据（"…是多少？"）直接调用 qwen-max + enable_search，不绕编排器
+- 📊 **Agent JSON 输出**: 所有 Agent 输出结构化 JSON，Coordinator 直接解析路由，不再从原始文本重复提取
 - 📎 **混合 RAG 检索**: 关键词精确匹配 + FAISS 语义检索，目录页自动降权，低质量文本自动过滤
-- 🌐 **双路联网搜索**: DDGS（拿 URL）+ DashScope enable_search（拿详实内容），并行执行
+- 🌐 **enable_search 联网搜索**: DashScope 原生搜索，国内直连，无需 VPN
 - 💬 **对话上下文**: 支持追问，系统理解"那同比增长呢？"中的指代关系
-- 📄 **文档可选**: 不上传文档也能直接提问，纯靠联网搜索回答
-- 📊 **RAG 评估体系**: RAG Triad 三维量化评估（Context Relevance / Faithfulness / Answer Relevance）
+- 📄 **文档可选**: 不上传文档也能直接提问，纯靠联网搜索；上传文档后自动提取公司名限定搜索范围
+- 🔒 **安全校验**: 文件上传大小/类型/MIME 三重校验，API Key 脱敏
+- 🐳 **Docker 支持**: 一键容器化部署
 - 🔑 **用户自有 API Key**: 不内置任何密钥
 
 ---
@@ -40,51 +43,39 @@ FinRisk MultiAgent 是一个基于**多智能体协作（Multi-Agent Collaborati
 ```mermaid
 flowchart TB
     A[👤 用户上传文档 + 提问]
-    A --> B[🧠 Coordinator 判断问题复杂度]
-    B --> C{简单查询?}
-    C -->|是| D[🔍 混合RAG检索 + 双路联网搜索]
-    D --> E[✍️ qwen-max 综合回答]
-    C -->|否| F{专项分析?}
-    F -->|是| G[📊 按需派 Agent + 搜索]
-    G --> H[Agent 输出 COMPLETE/NEED_MORE]
-    H -->|NEED_MORE| I[Coordinator 补搜 → 回传 Agent]
-    I --> H
-    H -->|COMPLETE| J[结构化 Claim 提取]
-    J --> K[算法冲突裁决]
-    K --> E
-    F -->|否 全面评估| L[🤖 全部 Agent + 魔鬼代言人]
-    L --> H
+    A --> B{简单查询?}
+    B -->|是| C[⚡ 快速通道: qwen-max + enable_search]
+    C --> D[直接回答]
+    B -->|否| E[🧠 Coordinator ReAct 决策循环]
+    E --> F[🔍 search_document + search_web]
+    F --> G{需要 Agent?}
+    G -->|是| H[📊 data_extractor → risk_assessor/compliance_checker → devils_advocate]
+    H --> I[Agent JSON 输出]
+    I --> J[Coordinator 审查 + 裁决矛盾]
+    J -->|NEED_MORE| F
+    J -->|COMPLETE| K[结构化简报 → qwen-max 综合报告]
+    G -->|否| K
 ```
 
-### 综合阶段的数据流
+### Agent 输出契约
 
-```
-原始文本碎片 ──→ [Claim 提取] ──→ [冲突裁决] ──→ 干净简报 ──→ LLM 写报告
-                    ↑                  ↑
-              LLM 提取 JSON      算法裁决规则:
-             {metric, value,     actual > forecast
-              source_type,       官方 > 媒体
-              source_label}      多源 > 孤立
-```
+每个 Agent 返回结构化 JSON，Coordinator 直接使用，不再重复 LLM 提取：
 
-不再靠 prompt 指令让 LLM "区分实际业绩和预测"，而是在数据进入 LLM 之前就结构化分离。
+| Agent | 输出 Schema |
+|-------|------------|
+| 📊 data_extractor | `{status, data: [{metric, value, source_type, source}]}` |
+| ⚠️ risk_assessor | `{status, findings: [{dimension, fact, judgment, risk_level, evidence}]}` |
+| 📋 compliance_checker | `{status, findings: [{area, finding, verdict, evidence}]}` |
+| 🔍 devils_advocate | `{status, challenges: [{target, target_conclusion, challenge, severity, evidence}]}` |
 
-### Coordinator 三步策略
+### Coordinator 决策策略
 
-| 问题类型 | Coordinator 策略 | 示例 |
-|----------|-----------------|------|
-| **简单查询** | 自己搜索 + 直接回答，不派 Agent | "2026年一季度利润是多少？" |
-| **专项分析** | 先搜文档和网络 → 需要才派专家 → Agent 自判是否够 | "偿债能力怎么样？" |
-| **全面评估** | 搜 → 派多位专家并行 → 魔鬼代言人质疑 | "做个全面风险评估" |
-
-### 四个专业 Agent
-
-| Agent | 角色 | 工作方式 |
-|-------|------|----------|
-| 📊 **数据提取** | CFA+CPA 审计专家 | 先理解问题 → 只提取相关数据 → `[COMPLETE]` 或 `[NEED_MORE]` |
-| ⚠️ **风险评估** | 18年风控经验 | 只分析用户关心的维度 → 自判信息是否足够 |
-| 📋 **合规审查** | 前证监会预审员 | 聚焦用户问的合规领域 → 不够就说需要搜什么 |
-| 🔍 **深度质疑** | 桥水 Red Team | 只质疑相关问题 → 弹药不够就申请搜索 |
+| 问题类型 | 策略 | 示例 |
+|----------|------|------|
+| **简单查询** | 快速通道：qwen-max + enable_search 直接回答 | "2026年一季度利润是多少？" |
+| **专项分析** | 搜 → data_extractor → risk_assessor/compliance_checker → devils_advocate | "偿债能力怎么样？" |
+| **全面评估** | 搜 → data_extractor → risk_assessor + compliance_checker 并行 → devils_advocate | "做个全面风险评估" |
+| **文档分析** | search_document 优先，search_web 仅补充，文档数据 vs 网络数据冲突时以文档为准 | "分析这份财报" |
 
 ---
 
@@ -120,7 +111,11 @@ cp .env.example .env
 ### 4. 启动
 
 ```bash
+# 直接启动
 python -m streamlit run app.py
+
+# 或使用 Docker
+docker compose up -d
 ```
 
 ### 5. 使用
@@ -139,31 +134,33 @@ python -m streamlit run app.py
 finrisk-multiagent/
 ├── app.py                      # Streamlit 主界面（中英双语）
 ├── requirements.txt            # Python 依赖
+├── Dockerfile                  # Docker 镜像
+├── docker-compose.yml          # Docker Compose 配置
 ├── .env.example                # 环境变量模板
 ├── README.md
 │
 ├── src/
-│   ├── orchestrator_v2.py      # 🧠 Coordinator（ReAct决策循环 + Claim提取裁决）
+│   ├── orchestrator_v2.py      # 🧠 Coordinator（ReAct决策循环 + Agent编排）
 │   ├── agents/
-│   │   ├── base.py             # Agent 基类：混合RAG + 简报注入 + LLM调用
+│   │   ├── base.py             # Agent 基类
 │   │   ├── data_extractor.py   # 📊 数据提取 Agent
 │   │   ├── risk_assessor.py    # ⚠️ 风险评估 Agent
 │   │   ├── compliance_checker.py # 📋 合规审查 Agent
 │   │   └── devils_advocate.py  # 🔍 深度质疑 Agent
 │   ├── rag/
-│   │   └── engine.py           # RAG 模块：关键词+FAISS混合检索·表格提取·低质量过滤
+│   │   └── engine.py           # RAG 模块：关键词+FAISS混合检索
 │   ├── search/
-│   │   └── web_search.py       # 联网搜索：DDGS(URL) + enable_search(内容) 双路
+│   │   └── web_search.py       # 联网搜索：enable_search
 │   └── llm/
-│       └── client.py           # LLM 客户端：DashScope + OpenAI兼容·流式输出
+│       └── client.py           # LLM 客户端：DashScope + OpenAI兼容
 │
 ├── prompts/                    # 📝 Prompt 模板
-│   ├── zh/                     # 中文
+│   ├── zh/                     # 中文（工业级：含输入/输出契约、失效行为）
 │   └── en/                     # English
 │
 ├── eval/                       # 📊 RAG 评估体系
 │   ├── golden_set.json         # Golden Test Set
-│   └── evaluator.py            # RAG Triad 评估器 (CR / Faith / AR)
+│   └── evaluator.py            # RAG Triad 评估器
 │
 └── examples/
     └── sample_report.md
@@ -177,26 +174,11 @@ finrisk-multiagent/
 |------|------|------|
 | **前端** | Streamlit | 纯 Python Web UI |
 | **LLM** | DashScope (Qwen) / OpenAI 兼容 | turbo/plus/max |
-| **Coordinator** | ReAct 决策循环 + Claim 提取裁决 | LLM 驱动的任务分解和调度 |
-| **RAG** | 关键词精确匹配 + FAISS 语义检索 | 双路融合，低质量自动过滤 |
-| **联网搜索** | DDGS + enable_search | URL + 详实内容双路并行 |
+| **Coordinator** | ReAct 决策循环 + Agent 编排 | LLM 驱动的任务分解和调度 |
+| **RAG** | 关键词精确匹配 + FAISS 语义检索 | 双路融合，embedding 失败自动降级为关键词 |
+| **联网搜索** | DashScope enable_search | 国内直连，超时 30s 兜底 |
 | **文档处理** | pdfplumber + LangChain TextSplitter | PDF 文本提取 + 表格结构化 |
-
----
-
-## 📊 RAG 评估体系
-
-基于 **RAG Triad** 框架的量化评估：
-
-| 维度 | 衡量 |
-|------|------|
-| **Context Relevance** | 检索到的文档段落对回答问题有帮助吗？ |
-| **Faithfulness** | 回答严格基于文档/搜索结果，没有编造吗？ |
-| **Answer Relevance** | 回答正面、直接地回应用户问题了吗？ |
-
-```bash
-python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf
-```
+| **部署** | Docker + docker-compose | 一键启动 |
 
 ---
 
@@ -215,7 +197,7 @@ python eval/evaluator.py --api-key $DASHSCOPE_API_KEY --pdf path/to/test.pdf
 
 ## ⚠️ 免责声明
 
-本系统由 AI 驱动，分析结果**仅供参考**，不构成投资建议或法律意见。
+本系统由 AI 驱动，分析结果**仅供参考**，不构成投资建议或法律意见。LLM 输出具有非确定性，关键财务决策请以官方披露文件为准。
 
 ---
 
