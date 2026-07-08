@@ -328,39 +328,61 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .main-title { font-size: 2rem; font-weight: 700; text-align: center; color: #1a3c5e; margin-bottom: 0.3rem; }
-    .subtitle { font-size: 0.95rem; color: #888; text-align: center; margin-bottom: 1rem; }
-    .section-title { font-size: 1.1rem; font-weight: 700; color: #2d6a9f; text-align: center; margin: 2rem 0 1rem 0; }
+    /* === Bloomberg Terminal Dark Theme === */
+    /* Streamlit config.toml handles base dark theme. This adds custom styling. */
 
-    .pipeline-container { display: flex; align-items: center; justify-content: center; gap: 0; padding: 1rem 0 1.5rem 0; }
-    .pipeline-step { background: linear-gradient(135deg, #1a3c5e 0%, #2d6a9f 100%); color: #fff; border-radius: 10px; padding: 14px 22px; text-align: center; min-width: 90px; font-weight: 600; font-size: 0.9rem; box-shadow: 0 3px 10px rgba(26,60,94,0.15); animation: fadeInUp 0.5s ease-out both; flex-shrink: 0; }
-    .pipeline-step:nth-child(1)  { animation-delay: 0.00s; }
-    .pipeline-step:nth-child(3)  { animation-delay: 0.10s; }
-    .pipeline-step:nth-child(5)  { animation-delay: 0.20s; }
-    .pipeline-step:nth-child(7)  { animation-delay: 0.30s; }
-    .pipeline-step:nth-child(9)  { animation-delay: 0.40s; }
-    .pipeline-arrow { font-size: 1.2rem; color: #bbb; margin: 0 6px; flex-shrink: 0; user-select: none; animation: arrowPulse 2s infinite; }
-    @keyframes fadeInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes arrowPulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.70; } }
+    /* -- Typography -- */
+    .main-title { font-size: 1.6rem; font-weight: 700; text-align: center; color: #ff6a00; margin-bottom: 0.2rem; font-family: 'Consolas', 'Courier New', monospace; letter-spacing: -0.5px; }
+    .subtitle { font-size: 0.82rem; color: #8b949e; text-align: center; margin-bottom: 1rem; }
+    .section-title { font-size: 1rem; font-weight: 700; color: #d4d9e0; text-align: center; margin: 1.5rem 0 0.8rem 0; }
 
-    .agent-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 1rem 0 1.5rem 0; }
+    /* -- Pipeline -- */
+    .pipeline-container { display: flex; align-items: center; justify-content: center; gap: 0; padding: 0.8rem 0 1.2rem 0; }
+    .pipeline-step { background: #141b22; color: #ff6a00; border: 1px solid #1e2833; border-radius: 4px; padding: 10px 18px; text-align: center; min-width: 80px; font-weight: 600; font-size: 0.8rem; font-family: 'Consolas', monospace; flex-shrink: 0; }
+    .pipeline-arrow { font-size: 0.9rem; color: #30363d; margin: 0 8px; flex-shrink: 0; }
+
+    /* -- Agent Cards (welcome) -- */
+    .agent-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0.8rem 0 1.2rem 0; }
     @media (max-width: 960px) { .agent-grid { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 520px) { .agent-grid { grid-template-columns: 1fr; } }
-    .agent-feature-card { border: 1px solid #e8eaed; border-radius: 12px; padding: 24px 18px 20px 18px; text-align: center; background: #fafbfc; transition: transform 0.2s, box-shadow 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100%; min-height: 200px; }
-    .agent-feature-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.08); }
-    .agent-feature-icon { font-size: 2rem; margin-bottom: 10px; line-height: 1; }
-    .agent-feature-name { font-weight: 700; font-size: 0.95rem; color: #1a3c5e; margin-bottom: 8px; }
-    .agent-feature-desc { font-size: 0.82rem; color: #666; line-height: 1.55; flex-grow: 1; }
+    .agent-feature-card { border: 1px solid #1e2833; border-radius: 6px; padding: 20px 14px 16px 14px; text-align: center; background: #141b22; transition: border-color 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100%; min-height: 160px; }
+    .agent-feature-card:hover { border-color: #ff6a00; }
+    .agent-feature-icon { font-size: 1.6rem; margin-bottom: 6px; }
+    .agent-feature-name { font-weight: 700; font-size: 0.85rem; color: #d4d9e0; margin-bottom: 4px; }
+    .agent-feature-desc { font-size: 0.76rem; color: #8b949e; line-height: 1.5; flex-grow: 1; }
 
-    .tech-tag { display: inline-block; background: #e8f0fe; color: #1a73e8; border-radius: 4px; padding: 3px 10px; font-size: 0.8rem; margin: 3px; font-weight: 500; }
-    .tech-tags-wrap { text-align: center; margin-bottom: 2rem; line-height: 2; }
+    /* -- Agent Analysis Cards (chat) -- */
+    .agent-card { border-radius: 4px; padding: 14px 16px; margin: 8px 0; border-left: 3px solid #30363d; background: #141b22; font-size: 0.85rem; }
+    .agent-card-data      { border-left-color: #ff6a00; }
+    .agent-card-risk      { border-left-color: #ff3b3b; }
+    .agent-card-compliance { border-left-color: #ffb800; }
+    .agent-card-devil     { border-left-color: #a855f7; }
+    .agent-card-synthesis { border-left-color: #00c853; }
+    .agent-card-header { font-weight: 700; font-size: 0.82rem; margin-bottom: 6px; color: #d4d9e0; }
+    .agent-card-body   { color: #b0b8c0; line-height: 1.6; max-height: 320px; overflow-y: auto; font-size: 0.83rem; }
 
-    .disclaimer { color: #aaa; font-size: 0.75rem; margin-top: 2rem; text-align: center; }
+    /* -- Progress Log -- */
+    .progress-log { background: #0a0e14; border: 1px solid #1e2833; border-radius: 4px; padding: 8px 12px; margin: 6px 0; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.76rem; color: #8b949e; line-height: 1.8; }
 
-    .agent-running { border-left: 4px solid #1a73e8; animation: pulse 1.5s infinite; }
-    .agent-done    { border-left: 4px solid #0f9d58; }
-    .agent-error   { border-left: 4px solid #d93025; }
-    @keyframes pulse { 0% { opacity: 1.0; } 50% { opacity: 0.6; } 100% { opacity: 1.0; } }
+    /* -- Tech Tags -- */
+    .tech-tag { display: inline-block; background: #141b22; color: #ff6a00; border: 1px solid #1e2833; border-radius: 3px; padding: 2px 8px; font-size: 0.73rem; margin: 2px; }
+    .tech-tags-wrap { text-align: center; margin-bottom: 1.5rem; line-height: 2.2; }
+
+    /* -- Upload Area -- */
+    section[data-testid="stFileUploader"] > div:first-child { border: 1px dashed #30363d !important; border-radius: 4px !important; padding: 8px 14px !important; background: #141b22 !important; }
+
+    /* -- Buttons -- */
+    .stButton > button { background: #141b22 !important; border: 1px solid #1e2833 !important; color: #b0b8c0 !important; border-radius: 4px !important; font-size: 0.82rem !important; }
+    .stButton > button:hover { border-color: #ff6a00 !important; color: #ff6a00 !important; }
+
+    /* -- Chat -- */
+    [data-testid="stChatMessage"] { background: transparent !important; }
+
+    /* -- Expander -- */
+    .streamlit-expanderHeader { font-size: 0.85rem !important; color: #8b949e !important; }
+
+    /* -- Misc -- */
+    .disclaimer { color: #484f58; font-size: 0.7rem; margin-top: 1.5rem; text-align: center; }
+    hr { border-color: #1e2833 !important; }
 </style>
 """, unsafe_allow_html=True)
 
